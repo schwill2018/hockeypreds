@@ -34,10 +34,11 @@ The goal is to showcase practical skills in data engineering, model development,
    - `data_preprocessing.R`: Prepares the raw data for modeling.  
 
 4. **Explore** the scripts in the `analysis` folder. These include:
-   - `point_spread.R`: Predicts player prop bets.
+   - `earned_point.R`: Predicts player prop bets.
+   - `earned_assist.R`: Predicts player prop bets.
+   - `earned_goal.R`: Predicts player prop bets.
    - `team_game_won_glm.R`: Predicts team-level win outcomes (moneyline).
    - `team_game_glm_spread.R`: Predicts team puckline outcomes.
-   - 
 ## What’s Included
 
 - **Preprocessed 2023–2024 Dataset**.

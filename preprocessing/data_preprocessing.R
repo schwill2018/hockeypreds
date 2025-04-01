@@ -2368,15 +2368,15 @@ team_df <- team_df_joined
 rm(team_metrics_df,team_df_joined)
 
 # List of columns to remove
-columns_to_remove <- c( "goals", "assists", "points",
-                        "plusMinus", "pim", "hits", "powerPlayGoals", "sog","faceoffWinningPctg",
+columns_to_remove <- c( "goals", "assists", "points", "plusMinus", "pim", 
+                        "hits", "powerPlayGoals", "sog","faceoffWinningPctg",
                         "blockedShots", "shifts", "giveaways", "takeaways", "otInUse", "league",
                         "shootoutInUse","toi", "toi_real", "home_score", "team_goals",
                         "away_score", "med_shift_toi_per_game", 
                         "avg_shift_toi_per_game", "away_lat", "away_long", "home_lat", "home_long",
                         "venue_lat", "venue_long", "sweaterNumber", "cumulative_toi",
-                        "name.default",  "easternUTCOffset",
-                        "team_assists", "team_plusMinus", "team_pim", "team_hits",
+                        "name.default",  "easternUTCOffset", "team_assists", 
+                        "team_plusMinus", "team_pim", "team_hits",
                         "team_powerPlayGoals", "team_sog", "team_faceoffWinningPctg",
                         "team_blockedShots", "team_shifts", "team_giveaways",
                         "team_takeaways", "team_loss", "team_assists_opp",
@@ -2503,7 +2503,8 @@ columns_to_remove <- c( "goals", "assists", "points",
                         "team_med_shift_toi_per_game_opp",
                         "team_avg_shift_toi_per_game_opp","main_position",
                         "team_game_spread","teams_game_spread", "position",
-                        "teams_win", "teams_loss")
+                        "teams_win", "teams_loss", "team_win","team_loss",
+                        "team_game_spread_opp" )
 
 columns_to_remove <- unique(columns_to_remove)
 common_columns <- intersect(columns_to_remove, colnames(team_df))

@@ -86,9 +86,9 @@ library(doParallel)
 library(keras)
 library(tensorflow)
 
-setwd("C:/Users/schne/OneDrive/Grad School/SMU/Classes/STAT 6341/Project/M3/main")
+setwd("C:/Users/schne/OneDrive/Job & Career/Grad School/SMU/Classes/STAT 6341/Project/M3/hockey_project_v2/users/willschneider/Hockey Project")
 rds_files_path <- getwd()
-team_recipe <- readRDS(paste0(rds_files_path, "/Data/team_recipe_goal_v2.rds"))
+team_recipe <- readRDS(paste0(rds_files_path, "/Data/team_recipe_spread.rds"))
 team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v2.rds"))
 hu_s <- dim(juice(prep(team_recipe)))[2]
 team_df_played <- team_df_played %>% filter(season != 2020)
@@ -105,7 +105,7 @@ game_splits <- rolling_origin(
   data = game_level_df,
   initial = 3611,   # Approx. _ season
   assess = 250,      # Approx. _ games in the test set
-  cumulative = FALSE,
+  cumulative = TRUE,
   skip = 250       # No overlap between test sets
 )
 
@@ -135,7 +135,7 @@ translate_splits <- function(spl) {
 
 # Set up parallel backend
 num_cores <- detectCores()
-cl <- makeCluster(max(0,num_cores-4))
+cl <- makeCluster(max(0,num_cores-2))
 registerDoParallel(cl)
 
 # Step 1: Translate all game-level splits into player-level splits
@@ -149,8 +149,8 @@ team_splits <- rsample::manual_rset(
 final_split <- team_splits$splits[[dim(team_splits)[1]]]
 team_splits <- team_splits[-dim(team_splits)[1],]
 
-saveRDS(final_split, file = paste0(rds_files_path, "/Data/team_final_split_250_v2.rds"))
-saveRDS(team_splits, file = paste0(rds_files_path, "/Data/team_splits_250_v2.rds"))
+saveRDS(final_split, file = paste0(rds_files_path, "/Data/team_final_split_250_spread.rds"))
+saveRDS(team_splits, file = paste0(rds_files_path, "/Data/team_splits_250_spread.rds"))
 rm(final_split)
 
 # Ensure team_splits is a valid rset object
@@ -207,6 +207,7 @@ build_custom_mlp <- function(hidden_units, penalty) {
       metrics = c('binary_accuracy')
     )
 }
+
 
 # Define Early Stopping callback
 # callback_reduce_lr_on_plateau()
@@ -314,27 +315,26 @@ mlp_res_rolling  <- tune_bayes(
   control = control_settings
 )
 rm(team_splits)
-stopCluster(cl)
 gc()
 
-# ###DELETE
-# saveRDS(mlp_res_rolling, file = paste0(rds_files_path, "/Data/team_rocv_res_mlp_cumulative_fit.rds"))
-# saveRDS(team_wf_mlp, file = paste0(rds_files_path, "/Data/team_wf_mlp_cumulative.rds"))
+###DELETE
+# saveRDS(mlp_res_rolling, file = paste0(rds_files_path, "/Data/team_rocv_res_mlp_cumulative_fit_spread.rds"))
+# saveRDS(team_wf_mlp, file = paste0(rds_files_path, "/Data/team_wf_mlp_cumulative_spread.rds"))
 # gc()
 
 # ---------------------------
 # Save MLP Tuning Results
 # ---------------------------
-saveRDS(mlp_res_rolling, file = paste0(rds_files_path, "/Data/team_rocv_res_mlp_fit.rds"))
-saveRDS(team_wf_mlp, file = paste0(rds_files_path, "/Data/team_wf_mlp.rds"))
+saveRDS(mlp_res_rolling, file = paste0(rds_files_path, "/Data/team_rocv_res_mlp_fit_spread.rds"))
+saveRDS(team_wf_mlp, file = paste0(rds_files_path, "/Data/team_wf_mlp_spread.rds"))
 gc()
 
 # ---------------------------
 # Select Best Hyperparameters
 # ---------------------------
 set.seed(123)
-mlp_res_rolling <- readRDS(paste0(rds_files_path, "/Data/team_rocv_res_mlp_fit.rds"))
-team_wf_mlp <- readRDS(paste0(rds_files_path, "/Data/team_wf_mlp.rds"))
+mlp_res_rolling <- readRDS(paste0(rds_files_path, "/Data/team_rocv_res_mlp_fit_spread.rds"))
+team_wf_mlp <- readRDS(paste0(rds_files_path, "/Data/team_wf_mlp_spread.rds"))
 best_mlp_rolling <- select_best(mlp_res_rolling, metric = "roc_auc")
 gc()
 
@@ -380,7 +380,7 @@ ggplot(team_metrics_best, aes(x = id, y = .estimate, color = .metric, group = .m
 # ---------------------------
 # Finalize the Workflow
 # ---------------------------
-final_split <- readRDS(paste0(rds_files_path, "/Data/team_final_split_250_v2.rds"))
+final_split <- readRDS(paste0(rds_files_path, "/Data/team_final_split_250_spread.rds"))
 final_mlp_wf <- finalize_workflow(team_wf_mlp, best_mlp_rolling)
 final_mlp_wf$fit$actions$model$spec
 rm(best_mlp_rolling,team_wf_mlp)
@@ -402,10 +402,10 @@ print(final_mlp_metrics)
 
 final_mlp_predictions <- collect_predictions(final_mlp_fit)
 
-saveRDS(final_mlp_wf, file = paste0(rds_files_path, "/Data/team_final_wf_mlp.rds"))
-saveRDS(final_mlp_fit, file = paste0(rds_files_path, "/Data/team_rocv_final_mlp_fit.rds"))
-saveRDS(final_mlp_metrics, file = paste0(rds_files_path, "/Data/team_rocv_final_mlp_metrics.rds"))
-saveRDS(final_mlp_predictions, file = paste0(rds_files_path, "/Data/team_rocv_final_mlp_predictions.rds"))
+saveRDS(final_mlp_wf, file = paste0(rds_files_path, "/Data/team_final_wf_mlp_spread.rds"))
+saveRDS(final_mlp_fit, file = paste0(rds_files_path, "/Data/team_rocv_final_mlp_fit_spread.rds"))
+saveRDS(final_mlp_metrics, file = paste0(rds_files_path, "/Data/team_rocv_final_mlp_metrics_spread.rds"))
+saveRDS(final_mlp_predictions, file = paste0(rds_files_path, "/Data/team_rocv_final_mlp_predictions_spread.rds"))
 
 gc()
 
@@ -427,9 +427,9 @@ library(betacal)
 library(themis)
 
 rds_files_path <- getwd()
-final_wf_mlp<- readRDS(paste0(rds_files_path,"/Data/team_wf_mlp.rds"))
-mlp_res_rolling <- readRDS(paste0(rds_files_path, "/Data/team_rocv_res_mlp_fit.rds"))
-final_predictions <- readRDS(paste0(rds_files_path, "/Data/team_rocv_final_mlp_predictions.rds"))
+final_wf_mlp<- readRDS(paste0(rds_files_path,"/Data/team_wf_mlp_spread.rds"))
+mlp_res_rolling <- readRDS(paste0(rds_files_path, "/Data/team_rocv_res_mlp_fit_spread.rds"))
+final_predictions <- readRDS(paste0(rds_files_path, "/Data/team_rocv_final_mlp_predictions_spread.rds"))
 gc()
 
 # Define metric set once
@@ -445,8 +445,6 @@ final_metrics_set <- metric_set(
 
 ### ----------Visualize Calibration (Distribution of Predictions)-----------------
 #Collect all out-of-sample predictions fit_resamples() result
-best_mlp_rolling <- select_best(mlp_res_rolling, metric = "roc_auc")
-
 set.seed(123)
 cv_preds <- mlp_res_rolling %>% 
   collect_predictions() %>% 
@@ -461,7 +459,7 @@ cv_preds_clean <- cv_preds %>%
 rm(cv_preds)
 
 # Set sample size, ensuring you don't exceed available rows
-sample_size <-  round(nrow(cv_preds_clean))
+sample_size <-  round(nrow(cv_preds_clean) * 0.10)
 n_rows <- nrow(cv_preds_clean)
 cv_preds_sample <- cv_preds_clean %>% 
   slice_sample(n = min(n_rows, sample_size))
@@ -470,77 +468,78 @@ cv_preds_sample <- cv_preds_clean %>%
 pen_facet <- cv_preds_sample %>%
   ggplot(aes(.pred_1)) +
   geom_histogram(col = "white", bins = 40) +
-  facet_wrap(~ game_won, ncol = 1, scales = "free") +
+  facet_wrap(~ game_won_spread, ncol = 1, scales = "free") +
   geom_rug(col = "blue", alpha = 0.5) + 
   theme_bw() +
   labs(x = "Probability Estimate of Point Earned (Logistic, Test)")
 pen_facet
 
 # Resample
-cal_plot_breaks(cv_preds_sample, truth = game_won,
+cal_plot_breaks(cv_preds_sample, truth = game_won_spread,
                 estimate = .pred_1, event_level = "first")
 # Test
-cal_plot_breaks(final_mlp_predictions, truth = game_won, 
+cal_plot_breaks(final_mlp_predictions, truth = game_won_spread, 
                 estimate = .pred_1, event_level = "first")
 
 
 ### ------Calibrate the Model on the training data---------------------
 cv_preds_clean <- cv_preds_clean %>%
-  filter(!is.na(.pred_1), !is.na(game_won)) %>%
+  filter(!is.na(.pred_1), !is.na(game_won_spread)) %>%
   mutate(.pred_1 = pmin(pmax(.pred_1, 0.00001), 0.99999))
 
-cv_cal_mod <- cal_estimate_beta(cv_preds_clean, truth = game_won)
+cv_cal_mod <- cal_estimate_beta(cv_preds_clean, truth = game_won_spread)
 train_beta_cal <- cv_preds_clean %>% cal_apply(cv_cal_mod)
 cls_met <- metric_set(roc_auc, brier_class)
 oth_met <- metric_set(yardstick::specificity, yardstick::sensitivity)
-train_beta_cal %>% cls_met(game_won, .pred_1)
+train_beta_cal %>% cls_met(game_won_spread, .pred_1)
 
 train_beta_cal_samp <- train_beta_cal %>% 
   slice_sample(n = min(n_rows, sample_size))
 train_beta_cal_samp %>%
-  cal_plot_windowed(truth = game_won, estimate = .pred_1, 
+  cal_plot_windowed(truth = game_won_spread, estimate = .pred_1, 
                     event_level = "first", step_size = 0.025)
 
 pen_train_facet <- train_beta_cal_samp %>%
   ggplot(aes(.pred_1)) +
   geom_histogram(col = "white", bins = 40) +
-  facet_wrap(~ game_won, ncol = 1, scales = "free") +
+  facet_wrap(~ game_won_spread, ncol = 1, scales = "free") +
   geom_rug(col = "blue", alpha = 0.5) + 
   theme_bw() +
   labs(x = "Probability Estimate of Point Earned (Logistic, Test)")
 pen_train_facet
 
 rm(team_fit)
+
 ### -----Predict on the Final Holdout Split------------------
 # Apply the calibration model to final predictions
-final_split <- readRDS(paste0(rds_files_path, "/Data/team_final_split_250_v2.rds"))
+final_split <- readRDS(paste0(rds_files_path, "/Data/team_final_split_250_spread.rds"))
 
 final_cal_preds <- final_mlp_predictions %>% cal_apply(cv_cal_mod)
 final_fit <- assessment(final_split) %>% 
-  rename(game_won_actual = game_won) %>%
+  rename(game_won_spread_actual = game_won_spread) %>%
   bind_cols(final_cal_preds)
 
-final_metrics_1 <- final_fit %>% cls_met(game_won_actual, .pred_1)
+final_metrics_1 <- final_fit %>% cls_met(game_won_spread_actual, .pred_1)
 print(final_metrics_1)
 
 final_cal_samp <- final_cal_preds %>% 
   slice_sample(n = min(n_rows, sample_size))
 final_cal_samp %>%
-  cal_plot_windowed(truth = game_won, estimate = .pred_1, 
+  cal_plot_windowed(truth = game_won_spread, estimate = .pred_1, 
                     event_level = "first", step_size = 0.025)
 
 pen_test_facet <- final_cal_samp %>%
   ggplot(aes(.pred_1)) +
   geom_histogram(col = "white", bins = 40) +
-  facet_wrap(~ game_won, ncol = 1, scales = "free") +
+  facet_wrap(~ game_won_spread, ncol = 1, scales = "free") +
   geom_rug(col = "blue", alpha = 0.5) + 
   theme_bw() +
   labs(x = "Probability Estimate of Point Earned (Logistic, Test)")
 pen_test_facet
 
 # Save final metrics and predictions
-saveRDS(final_fit, file = paste0(rds_files_path, "/Data/team_rocv_final_mlp_fit_cal.rds"))
-saveRDS(final_metrics_1, file = paste0(rds_files_path, "/Data/team_rocv_final_mlp_metrics_cal.rds"))
+saveRDS(final_fit, file = paste0(rds_files_path, "/Data/team_rocv_final_mlp_fit_cal_spread.rds"))
+saveRDS(final_metrics_1, file = paste0(rds_files_path, "/Data/team_rocv_final_mlp_metrics_cal_spread.rds"))
 rm(final_wf_mlp)
 gc()
 
@@ -564,7 +563,7 @@ library(tensorflow)
 # This creates a fully fitted model using all of team_df_played
 rds_files_path <- getwd()
 team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v2.rds"))
-final_mlp_wf <- readRDS(paste0(rds_files_path,"/Data/team_final_wf_mlp.rds"))
+final_mlp_wf <- readRDS(paste0(rds_files_path,"/Data/team_final_wf_mlp_spread.rds"))
 final_mlp_wf$fit$actions$model$spec
 
 # Custom model-building function
@@ -624,15 +623,15 @@ registerDoParallel(cl)
 
 final_model <- fit(final_mlp_wf, data = team_df_played)
 # Optionally, save this deployable model:
-saveRDS(final_model, file = paste0(rds_files_path, "/Data/team_deployable_model_mlp.rds"))
+saveRDS(final_model, file = paste0(rds_files_path, "/Data/team_deployable_model_mlp_spread.rds"))
 
 train_preds <- predict(final_model, new_data = team_df_played, type = "prob")
 train_class <- predict(final_model, new_data = team_df_played) 
 train_model <- train_preds %>%
   bind_cols(train_class) %>%
-  bind_cols(team_df_played %>% select(game_won))
+  bind_cols(team_df_played %>% select(game_won_spread))
 
-cv_cal_mod <- cal_estimate_beta(train_model, truth = game_won,
+cv_cal_mod <- cal_estimate_beta(train_model, truth = game_won_spread,
                                 estimate = .pred_1)
 
 rm(team_df_played, train_preds, train_class)
@@ -655,17 +654,17 @@ unplayed_results <- unplayed_games %>%
          model_version = "nn_v_25",   # define this near the top of your script
          # Initially, actual outcome is unknown
          actual_outcome = NA) %>%
-  select(-"game_won")
+  select(-"game_won_spread")
 
 # Save predictions
-saveRDS(unplayed_results, file = paste0(rds_files_path, "/Data/team_unplayed_games_mlp_predictions.rds"))
-saveRDS(unplayed_cal_preds, file = paste0(rds_files_path, "/Data/team_unplayed_games_mlp_preds_cal.rds"))
+saveRDS(unplayed_results, file = paste0(rds_files_path, "/Data/team_unplayed_games_mlp_predictions_spread.rds"))
+saveRDS(unplayed_cal_preds, file = paste0(rds_files_path, "/Data/team_unplayed_games_mlp_preds_cal_spread.rds"))
 rm(unplayed_class, unplayed_cal_preds, unplayed_predictions,final_model)
 
 
 #### -----Update Deployment Log------
-log_file <- paste0(rds_files_path, "/Data/team_unplayed_mlp_predictions.csv")
-unplayed_results <- readRDS(paste0(rds_files_path,"/Data/team_unplayed_games_mlp_predictions.rds"))
+log_file <- paste0(rds_files_path, "/Data/team_unplayed_predictions_spread_mlp.csv")
+unplayed_results <- readRDS(paste0(rds_files_path,"/Data/team_unplayed_games_mlp_predictions_spread.rds"))
 
 # Define key columns and prediction columns
 key_cols <- c("game_id", "teamId")
@@ -687,8 +686,6 @@ if (file.exists(log_file)) {
   unplayed_results$away_id <- as.character(unplayed_results$away_id)
   old_log$prediction_time <- as_datetime(old_log$prediction_time)
   unplayed_results$prediction_time <- as_datetime(unplayed_results$prediction_time)
-  # old_log$game_won_spread <- as.factor(old_log$game_won_spread)
-  unplayed_results$game_won_spread <- as.factor(unplayed_results$game_won_spread)
   # # Keep rows from new predictions that are different on keys and prediction columns
   # new_to_add <- unplayed_results %>%
   #   # Use a join that compares both keys and prediction columns
@@ -714,11 +711,11 @@ team_df <- readRDS(paste0(rds_files_path, "/Data/team_df_v2.rds"))
 # Filter unplayed_results so that only games where current time is at least 1 day past startTimeUTC are updated.
 unplayed_updated <- unplayed_results %>%
   filter(Sys.time() > as.POSIXct(startTimeUTC, tz = "America/Chicago") + days(1)) %>%
-  left_join(team_df[, c("game_id", "teamId", "game_won")],
+  left_join(team_df[, c("game_id", "teamId", "game_won_spread")],
             by = c("game_id", "teamId"))
 
 rm(team_df)
-saveRDS(unplayed_updated, file = paste0(rds_files_path, "/Data/team_unplayed_games_actuals_v2.rds"))
+saveRDS(unplayed_updated, file = paste0(rds_files_path, "/Data/team_unplayed_games_actuals_spread.rds"))
 
 # Periodically evaluate performance:
 library(yardstick)

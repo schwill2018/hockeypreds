@@ -54,7 +54,7 @@ The goal is to showcase practical skills in data engineering, model development,
 
 - Expanded modeling features and temporal dynamics.
 - Team-level fatigue tracking, travel effects, and matchup-based adjustments.
-- Live updating utility models and deployment.
+- Live updating and live game prediction models and deployment.
 
 ## Contributing
 

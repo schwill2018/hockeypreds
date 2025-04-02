@@ -2504,7 +2504,9 @@ columns_to_remove <- c( "goals", "assists", "points", "plusMinus", "pim",
                         "team_avg_shift_toi_per_game_opp","main_position",
                         "team_game_spread","teams_game_spread", "position",
                         "teams_win", "teams_loss", "team_win","team_loss",
-                        "team_game_spread_opp" )
+                        "team_game_spread_opp", "lagged_avg_shift_toi", 
+                        "lagged_n_shift", "lagged_game_toi", 
+                        "lagged_avg_n_shift_last_X_games")
 
 columns_to_remove <- unique(columns_to_remove)
 common_columns <- intersect(columns_to_remove, colnames(team_df))
@@ -2640,7 +2642,7 @@ team_recipe <- recipe(game_won ~ ., data = team_df_played) %>%
   step_mutate(season = as.factor(season)) %>%
   step_zv() %>%
   step_normalize(all_numeric_predictors()) %>%
-  step_novel(all_nominal_predictors()) %>%
+  step_novel(all_nominal_predictors(), -is_home) %>%
   step_dummy(all_nominal_predictors())
 
 vars <- team_recipe$var_info
@@ -2759,7 +2761,7 @@ team_recipe <- recipe(game_won_spread ~ ., data = team_df_played) %>%
   step_mutate(season = as.factor(season)) %>%
   step_zv() %>%
   step_normalize(all_numeric_predictors()) %>%
-  step_novel(all_nominal_predictors()) %>%
+  step_novel(all_nominal_predictors(), -is_home) %>%
   step_dummy(all_nominal_predictors())
 
 vars <- team_recipe$var_info

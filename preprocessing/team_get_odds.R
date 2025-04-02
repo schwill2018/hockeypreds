@@ -1,7 +1,7 @@
 #################################################
 #################################################
 #################################################
-##SAVE IN TASKSCHEDULER FOLER AFTER EDITING!!!!##
+##SAVE IN TASKSCHEDULER FOLDER AFTER EDITING!!!!#
 #################################################
 #################################################
 #################################################
@@ -11,6 +11,7 @@ library(httr)
 library(jsonlite)
 library(tidyverse)
 library(doParallel)
+setwd("C:/Users/schne/OneDrive/Grad School/SMU/Classes/STAT 6341/Project/M3/main")
 
 num_cores <- detectCores()
 cl <- makeCluster(1)
@@ -53,7 +54,7 @@ odds_flat <- odds_df %>%
 
 stopCluster(cl)            
 # Define the path for your appendable log file
-log_file <- file.path(getwd(), "Data", "nhl_team_odds_log.csv")
+log_file <- file.path(f_path, "Data", "nhl_team_odds_log.csv")
 
 # If the log file exists, read it and append the new odds; otherwise, create it
 if(file.exists(log_file)) {

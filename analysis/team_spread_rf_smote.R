@@ -18,7 +18,7 @@ gc()
 
 rec_bake <- team_recipe %>% prep() %>% bake(., new_data =  NULL)
 colnames(rec_bake)
-# team_recipe <- team_recipe  %>% step_smotenc(game_won_spread, neighbors = 5)
+team_recipe <- team_recipe  %>% step_smotenc(game_won_spread, neighbors = 5)
 gc()
 
 # ### ----ROLLING CV (250 GAME SPLIT)-----
@@ -165,11 +165,11 @@ toc()
 # ---------------------------
 #  Save Random Forest Tuning Results
 # ---------------------------
-saveRDS(rf_res_rolling, file = paste0(rds_files_path, "/Data/team_rocv_res_rf_fit_spread.rds"))
-saveRDS(team_wf_rf_rolling, file = paste0(rds_files_path, "/Data/team_wf_rf_spread.rds"))
+saveRDS(rf_res_rolling, file = paste0(rds_files_path, "/Data/team_rocv_res_rf_fit_spread_smote.rds"))
+saveRDS(team_wf_rf_rolling, file = paste0(rds_files_path, "/Data/team_wf_rf_spread_smote.rds"))
 
-rf_res_rolling <- readRDS(paste0(rds_files_path, "/Data/team_rocv_res_rf_fit_spread.rds"))
-team_wf_rf_rolling <- readRDS(paste0(rds_files_path, "/Data/team_wf_rf_spread.rds"))
+rf_res_rolling <- readRDS(paste0(rds_files_path, "/Data/team_rocv_res_rf_fit_spread_smote.rds"))
+team_wf_rf_rolling <- readRDS(paste0(rds_files_path, "/Data/team_wf_rf_spread_smote.rds"))
 gc()
 
 team_metrics <- rf_res_rolling %>% collect_metrics(summarize = FALSE) %>%
@@ -235,10 +235,10 @@ print(final_rf_metrics)
 
 final_rf_predictions <- collect_predictions(final_rf_fit)
 
-saveRDS(final_rf_wf, file = paste0(rds_files_path, "/Data/team_final_wf_rf_spread.rds"))
-saveRDS(final_rf_fit, file = paste0(rds_files_path, "/Data/team_rocv_final_rf_fit_spread.rds"))
-saveRDS(final_rf_metrics, file = paste0(rds_files_path, "/Data/team_rocv_final_rf_metrics_spread.rds"))
-saveRDS(final_rf_predictions, file = paste0(rds_files_path, "/Data/team_rocv_final_rf_predictions_spread.rds"))
+saveRDS(final_rf_wf, file = paste0(rds_files_path, "/Data/team_final_wf_rf_spread_smote.rds"))
+saveRDS(final_rf_fit, file = paste0(rds_files_path, "/Data/team_rocv_final_rf_fit_spread_smote.rds"))
+saveRDS(final_rf_metrics, file = paste0(rds_files_path, "/Data/team_rocv_final_rf_metrics_spread_smote.rds"))
+saveRDS(final_rf_predictions, file = paste0(rds_files_path, "/Data/team_rocv_final_rf_predictions_spread_smote.rds"))
 
 rm(final_rf_fit)
 rm(final_rf_metrics)
@@ -270,9 +270,9 @@ library(themis)
 library(ranger)
 
 rds_files_path <- getwd()
-team_wf_rf<- readRDS(paste0(rds_files_path,"/Data/team_wf_rf_spread.rds"))
-team_fit <- readRDS(paste0(rds_files_path, "/Data/team_rocv_res_rf_fit_spread.rds"))
-final_predictions <- readRDS(paste0(rds_files_path, "/Data/team_rocv_final_rf_predictions_spread.rds"))
+team_wf_rf<- readRDS(paste0(rds_files_path,"/Data/team_wf_rf_spread_smote.rds"))
+team_fit <- readRDS(paste0(rds_files_path, "/Data/team_rocv_res_rf_fit_spread_smote.rds"))
+final_predictions <- readRDS(paste0(rds_files_path, "/Data/team_rocv_final_rf_predictions_spread_smote.rds"))
 gc()
 
 # Define metric set once
@@ -383,8 +383,8 @@ rf_test_facet <- final_cal_samp %>%
 rf_test_facet
 
 # Save final metrics and predictions
-saveRDS(final_fit, file = paste0(rds_files_path, "/Data/team_rocv_final_rf_fit_cal_spread.rds"))
-saveRDS(final_metrics_1, file = paste0(rds_files_path, "/Data/team_rocv_final_rf_metrics_cal_spread.rds"))
+saveRDS(final_fit, file = paste0(rds_files_path, "/Data/team_rocv_final_rf_fit_cal_spread_smote.rds"))
+saveRDS(final_metrics_1, file = paste0(rds_files_path, "/Data/team_rocv_final_rf_metrics_cal_spread_smote.rds"))
 
 gc()
 
@@ -405,7 +405,7 @@ library(ranger)
 # Assume you already have these objects saved from your prior work:
 rds_files_path <- getwd()
 team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v2.rds"))
-final_rf_wf <- readRDS(paste0(rds_files_path,"/Data/team_final_wf_rf_spread.rds"))
+final_rf_wf <- readRDS(paste0(rds_files_path,"/Data/team_final_wf_rf_spread_smote.rds"))
 
 num_cores <- detectCores()
 cl <- makeCluster(max(1,num_cores-4))
@@ -416,7 +416,7 @@ registerDoParallel(cl)
 final_model <- fit(final_rf_wf, data = team_df_played)
 
 # Optionally, save this deployable model:
-saveRDS(final_model, file = paste0(rds_files_path, "/Data/team_deployable_model_rf_spread.rds"))
+saveRDS(final_model, file = paste0(rds_files_path, "/Data/team_deployable_model_rf_spread_smote.rds"))
 rm(final_rf_wf)
 
 # 2. Predict on the training data
@@ -447,14 +447,14 @@ unplayed_results <- unplayed_games %>%
          pred_class = unplayed_class$.pred_class,
          cal_probability = unplayed_cal_preds$.pred_1,
          prediction_time = Sys.time(),
-         model_version = "rf_v_25",   # define this near the top of your script
+         model_version = "rf_v_25_smote",   # define this near the top of your script
          # Initially, actual outcome is unknown
          actual_outcome = NA) %>%
   select(-"game_won_spread")
 
 # Save predictions
-saveRDS(unplayed_results, file = paste0(rds_files_path, "/Data/team_unplayed_games_rf_predictions_spread.rds"))
-saveRDS(unplayed_cal_preds, file = paste0(rds_files_path, "/Data/team_unplayed_games_rf_preds_cal_spread.rds"))
+saveRDS(unplayed_results, file = paste0(rds_files_path, "/Data/team_unplayed_games_rf_predictions_spread_smote.rds"))
+saveRDS(unplayed_cal_preds, file = paste0(rds_files_path, "/Data/team_unplayed_games_rf_preds_cal_spread_smote.rds"))
 rm(unplayed_class, unplayed_cal_preds, unplayed_predictions,final_model)
 
 

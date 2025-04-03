@@ -2643,7 +2643,7 @@ team_recipe <- recipe(game_won ~ ., data = team_df_played) %>%
   step_zv() %>%
   step_normalize(all_numeric_predictors()) %>%
   step_novel(all_nominal_predictors(), -is_home) %>%
-  step_dummy(all_nominal_predictors())
+  step_dummy(all_nominal_predictors()) 
 
 vars <- team_recipe$var_info
 rec_bake <- team_recipe %>% prep() %>% bake(., new_data =  NULL)

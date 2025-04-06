@@ -409,27 +409,49 @@ registerDoParallel(cl)
 ### -----Step 1: Fit your workflow on all training data for deployment-------------
 # 1. Create a fully fitted model using all of team_df_played
 final_model <- fit(final_rf_wf, data = team_df_played)
+train_preds <- predict(final_model, new_data = team_df_played, type = "prob")
+train_class <- predict(final_model, new_data = team_df_played) 
+train_model <- train_preds %>%
+  bind_cols(train_class) %>%
+  bind_cols(team_df_played %>% select(game_won))
+cv_cal_mod <- cal_estimate_beta(train_model, truth = game_won,
+                                estimate = .pred_1)
 
+team_df_cal_preds <- train_model %>% cal_apply(cv_cal_mod)
+saveRDS(team_df_cal_preds, file = paste0(rds_files_path, "/Data/team_deployable_model_preds_rf.rds"))
+rm(train_preds, train_class)
+
+### -----Step 2: Refit final model on correct training window-----
+team_df_train <- team_df_played %>%
+  arrange(startTimeUTC, game_id) %>%
+  group_by(game_id) %>%
+  slice(1) %>%  # one row per game (assuming team-based rows)
+  ungroup() %>%
+  tail(3611) %>%
+  pull(game_id)
+
+# Filter training rows from team_df_played
+team_df_played <- team_df_played %>%
+  filter(game_id %in% team_df_train)
+#Sanity check
+length(unique(team_df_played$game_id))
 # Optionally, save this deployable model:
 saveRDS(final_model, file = paste0(rds_files_path, "/Data/team_deployable_model_rf.rds"))
 rm(final_rf_wf)
 
-# 2. Predict on the training data
+### ---# Step 3: Predict on Unplayed Games Using the Fully Fitted Model and----
+### ----Preprocess the unplayed games data-----------------
 train_preds <- final_model %>% predict(team_df_played, type = "prob")
 train_class <- predict(final_model, new_data = team_df_played) 
 train_model <- train_preds %>%
   bind_cols(train_class) %>%
   bind_cols(team_df_played %>% select(game_won))
-
-# 3. Calibrate on full training data
 cv_cal_mod <- cal_estimate_beta(train_model, truth = game_won,
                                 estimate = .pred_1)
 
 rm(team_df_played, train_preds, train_class)
-### -----Step 2: Preprocess the unplayed games data-----------------
-unplayed_games <- readRDS(paste0(rds_files_path, "/Data/team_df_v2.rds")) %>% filter(game_status == "unplayed")
-
-### ---# Step 3: Predict on Unplayed Games Using the Fully Fitted Model----
+unplayed_games <- readRDS(paste0(rds_files_path, "/Data/team_df_v2.rds")) %>% 
+  filter(game_status == "unplayed")
 # Since final_model is a fully fitted workflow, you can call predict() directly on new data.
 unplayed_predictions <- predict(final_model, new_data = unplayed_games, type = "prob")
 unplayed_class <- predict(final_model, new_data = unplayed_games)
@@ -441,6 +463,7 @@ unplayed_results <- unplayed_games %>%
   mutate(pred_probability = unplayed_predictions$.pred_1,
          pred_class = unplayed_class$.pred_class,
          cal_probability = unplayed_cal_preds$.pred_1,
+         cal_class = ifelse(cal_probability > .50, 1, 0),
          prediction_time = Sys.time(),
          model_version = "rf_v_25",   # define this near the top of your script
          # Initially, actual outcome is unknown

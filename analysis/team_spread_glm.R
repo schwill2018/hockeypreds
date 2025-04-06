@@ -24,13 +24,115 @@ library(purrr)
 library(themis)
 
 rds_files_path <- getwd()
+team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v2.rds"))
+all_boxscore_df <- readRDS(paste0(rds_files_path, "/Data/combined_2009_2024_boxscore_v2.rds"))
+game_scores <- all_boxscore_df %>% distinct(game_id, teamId, away_score, home_score, season) %>%
+  filter(season >= 2019) %>% select(-season)
+team_df_played <- team_df_played %>% inner_join(game_scores, by = c("game_id","teamId"))
+rm(all_boxscore_df,game_scores)
+
+# team_splits <- readRDS(paste0(rds_files_path, "/Data/team_splits_v2.rds"))
+# team_fit <- readRDS(paste0(rds_files_path, "/Data/team_rocv_res_glm_fit_v2.rds"))
+
+game_won_preds <- readRDS(paste0(rds_files_path, "/Data/team_deployable_model_preds_glm.rds"))
 team_recipe <- readRDS(paste0(rds_files_path, "/Data/team_recipe_spread.rds"))
-team_splits <- readRDS(paste0(rds_files_path, "/Data/team_splits_v2.rds"))
 
 rec_bake <- team_recipe %>% prep() %>% bake(., new_data =  NULL)
 colnames(rec_bake)
-# team_recipe <- team_recipe  %>% step_smotenc(game_won_spread, neighbors = 5)
+rm(rec_bake)
 gc()
+
+team_df_played <- team_df_played %>% 
+  bind_cols(game_won_preds[,c(".pred_1",".pred_0",".pred_class")]) %>%
+  rename(game_won_.pred_1 = .pred_1, 
+         game_won_.pred_0 = .pred_0,
+         favorite = .pred_class) %>%
+  mutate(game_won_spread = case_when(
+    favorite == 1 & abs(home_score - away_score) >= 2 ~ "1",   # Favorite covers if wins by 2 or more
+    favorite == 0 & abs(home_score - away_score) <= 1 ~ "1",   # Underdog covers if loses by 1 or wins
+    TRUE ~ "0")) %>%
+  mutate(game_won_spread = factor(game_won_spread, levels = c("1", "0"))) %>%
+  select(-home_score, -away_score)
+
+### ----ROLLING CV (25 GAME SPLIT)-----
+# Create a game-level data frame
+game_level_df <- team_df_played %>%
+  distinct(game_id, game_date, startTimeUTC) %>%
+  arrange(startTimeUTC, game_id) %>%
+  mutate(game_index = row_number())
+
+# Create rolling origin resamples at the game level
+game_splits <- rolling_origin(
+  data = game_level_df,
+  initial = 3611,   # Approx. _ season
+  assess = 25,      # Approx. _ games in the test set
+  cumulative = FALSE,
+  skip = 25       # No overlap between test sets
+)
+
+# Translate splits to player level
+translate_splits <- function(spl) {
+  train_games <- analysis(spl)$game_id
+  test_games <- assessment(spl)$game_id
+  
+  # Ensure same-date games are handled correctly
+  train_dates <- game_level_df %>%
+    filter(game_id %in% train_games) %>%
+    pull(startTimeUTC)
+  
+  test_dates <- game_level_df %>%
+    filter(game_id %in% test_games) %>%
+    pull(startTimeUTC)
+  
+  #find player rows that match those training or test dates
+  train_indices <- which(team_df_played$startTimeUTC %in% train_dates)
+  test_indices <- which(team_df_played$startTimeUTC %in% test_dates)
+  
+  rsample::make_splits(
+    list(analysis = train_indices, assessment = test_indices),
+    data = team_df_played
+  )
+}
+
+# Set up parallel backend
+num_cores <- detectCores()
+cl <- makeCluster(max(0,num_cores-2))
+registerDoParallel(cl)
+
+# Step 1: Translate all game-level splits into player-level splits
+team_splits_list <- map(game_splits$splits, translate_splits)
+
+# Step 4: Create the rset object for the remaining splits
+team_splits <- rsample::manual_rset(
+  splits = team_splits_list,
+  ids = game_splits$id
+)
+final_split <- team_splits$splits[[dim(team_splits)[1]]]
+team_splits <- team_splits[-dim(team_splits)[1],]
+
+# Ensure team_splits is a valid rset object
+class(team_splits) <- c("manual_rset", "rset", "tbl_df", "tbl", "data.frame")
+rm(team_splits_list)
+
+for (s in 1:dim(team_splits)[1]) {
+  #Check logic working
+  first_split <- team_splits$splits[[s]]
+  train_indices <- analysis(first_split)
+  test_indices <- assessment(first_split)
+  
+  print(paste0("NA's in ",s,"train split: ",sum(colSums(is.na(train_indices)))))
+  print(paste0("NA's in ",s,"test split: ",sum(colSums(is.na(test_indices)))))
+  
+}
+
+rm(train_indices)
+rm(test_indices)
+rm(first_split)
+
+saveRDS(final_split, file = paste0(rds_files_path, "/Data/team_final_split_spread.rds"))
+saveRDS(team_splits, file = paste0(rds_files_path, "/Data/team_splits_spread.rds"))
+
+stopCluster(cl)
 
 # Set up parallel backend
 num_cores <- detectCores()
@@ -306,7 +408,6 @@ rds_files_path <- getwd()
 team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v2.rds"))
 team_wf_log <- readRDS(paste0(rds_files_path,"/Data/team_wf_log_spread.rds"))
 
-
 team_df_train <- team_df_played %>%
   arrange(startTimeUTC, game_id) %>%
   group_by(game_id) %>%
@@ -328,24 +429,36 @@ registerDoParallel(cl)
 ### -----Step 1: Fit your workflow on all training data for deployment-------------
 # This creates a fully fitted model using all of team_df_played
 final_model <- fit(team_wf_log, data = train_df)
-
-# Optionally, save this deployable model:
 saveRDS(final_model, file = paste0(rds_files_path, "/Data/team_deployable_model_spread.rds"))
 rm(team_wf_log)
 
-train_preds <- predict(final_model, new_data = team_df_played, type = "prob")
-train_class <- predict(final_model, new_data = team_df_played) 
+train_preds <- predict(final_model, new_data = train_df, type = "prob")
+train_class <- predict(final_model, new_data = train_df) 
 train_model <- train_preds %>%
   bind_cols(train_class) %>%
-  bind_cols(team_df_played %>% select(game_won_spread))
-
+  bind_cols(train_df %>% select(game_won_spread))
 cv_cal_mod <- cal_estimate_beta(train_model, truth = game_won_spread,
                                 estimate = .pred_1)
 
-rm(team_df_played, train_preds, train_class)
+rm(team_df_played, train_preds, train_class,train_df)
 
 ### -----Step 2: Preprocess the unplayed games data-----------------
-unplayed_games <- readRDS(paste0(rds_files_path, "/Data/team_df_v2.rds")) %>% filter(game_status == "unplayed")
+unplayed_games <- readRDS(paste0(rds_files_path, "/Data/team_df_v2.rds")) %>% 
+  filter(game_status == "unplayed") %>% 
+  select(-game_won_spread)
+
+unplayed_won_preds <- readRDS(paste0(rds_files_path, 
+                                     "/Data/team_unplayed_games_predictions_v2.rds"))
+# unplayed_won_cal <- readRDS(paste0(rds_files_path,  "/Data/team_unplayed_games_preds_cal_v2.rds"))
+
+unplayed_games <- unplayed_games  %>% 
+  left_join(unplayed_won_preds[,c("game_id","teamId","cal_probability")], 
+            by = c("game_id", "teamId")) %>%
+  mutate(cal_class = ifelse(cal_probability > .50, "1", "0")) %>%
+  rename(game_won_.pred_1 = cal_probability, 
+         favorite = cal_class) %>%
+  mutate(favorite = factor(favorite,levels = c("1","0"))) %>%
+  mutate(game_won_.pred_0 = 1 - game_won_.pred_1)
 
 ### ---# Step 3: Predict on Unplayed Games Using the Fully Fitted Model----
 # Since final_model is a fully fitted workflow, you can call predict() directly on new data.
@@ -359,11 +472,11 @@ unplayed_results <- unplayed_games %>%
   mutate(pred_probability = unplayed_predictions$.pred_1,
          pred_class = unplayed_class$.pred_class,
          cal_probability = unplayed_cal_preds$.pred_1,
+         cal_class = ifelse(cal_probability > .50, 1, 0),
          prediction_time = Sys.time(),
-         model_version = "glm_v_25",   # define this near the top of your script
+         model_version = "glm_v_25_pred_with_gamewon",   # define this near the top of your script
          # Initially, actual outcome is unknown
-         actual_outcome = NA) %>%
-  select(-"game_won_spread")
+         actual_outcome = NA)
 
 # Save predictions
 saveRDS(unplayed_results, file = paste0(rds_files_path, "/Data/team_unplayed_games_predictions_spread.rds"))

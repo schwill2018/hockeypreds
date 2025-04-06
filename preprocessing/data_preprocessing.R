@@ -874,9 +874,7 @@ calculate_team_metrics <- function(data, window) {
     ungroup() %>%
     # ✅ NOW calculate the spread at the team-game level
     mutate(
-      teams_game_spread = case_when(teamId == home_id ~ home_score - away_score,
-                                    teamId == away_id ~ away_score - home_score,
-                                    TRUE ~ NA_real_)
+      teams_game_spread = abs(home_score - away_score)
     ) %>%
     arrange(season, game_id, game_date, teamId) %>%
     group_by(season,teamId) %>%
@@ -2502,8 +2500,8 @@ columns_to_remove <- c( "goals", "assists", "points", "plusMinus", "pim",
                         "team_avg_shift_toi_per_game","team_n_shifts_opp",
                         "team_med_shift_toi_per_game_opp",
                         "team_avg_shift_toi_per_game_opp","main_position",
-                        "team_game_spread","teams_game_spread", "position",
-                        "teams_win", "teams_loss", "team_win","team_loss",
+                        "teams_game_spread", "position","teams_win", 
+                        "teams_loss", "team_win","team_loss",
                         "team_game_spread_opp", "lagged_avg_shift_toi", 
                         "lagged_n_shift", "lagged_game_toi", 
                         "lagged_avg_n_shift_last_X_games")
@@ -2512,7 +2510,7 @@ columns_to_remove <- unique(columns_to_remove)
 common_columns <- intersect(columns_to_remove, colnames(team_df))
 rm(all_boxscore_df)
 
-# Ensure player_df is sorted by season and game_date
+# Ensure team_df is sorted by season and game_date
 team_df <- team_df %>%
   arrange(season, startTimeUTC) %>%
   mutate(game_won = as.factor(game_won)) %>%
@@ -2542,7 +2540,9 @@ team_df <- team_df %>%
   mutate(b2b_win_ratio_lag = lag(b2b_win_rate, 1),
          b2b_win_ratio_lag = coalesce(b2b_win_ratio_lag,0)) %>%
   ungroup() %>%
-  select(-game_won_numeric, -b2b_win, -b2b_wins_cumsum, -b2b_games_cumsum, -b2b_win_rate, -days_since_last_game)
+  select(-game_won_numeric, -b2b_win, -b2b_wins_cumsum, 
+         -b2b_games_cumsum, -b2b_win_rate, -days_since_last_game) %>%
+  arrange(season, startTimeUTC)
 
 rm(player_df)
 saveRDS(team_df,file = paste0(rds_files_path, "/Data/team_df_v2.rds"))
@@ -2628,6 +2628,7 @@ rm(first_split)
 # Define recipe, model, and workflow
 team_recipe <- recipe(game_won ~ ., data = team_df_played) %>%
   step_rm(game_status) %>%
+  step_rm(team_game_spread) %>%
   step_rm(game_won_spread) %>%
   step_rm(playerId) %>%
   step_rm(all_of(c("venueUTCOffset","venueLocation","away_team_name", 
@@ -2747,6 +2748,7 @@ team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v2.rds"))
 #Define recipe, model, and workflow
 team_recipe <- recipe(game_won_spread ~ ., data = team_df_played) %>%
   step_rm(game_status) %>%
+  step_rm(team_game_spread) %>%
   step_rm(game_won) %>%
   step_rm(playerId) %>%
   step_rm(all_of(c("venueUTCOffset","venueLocation","away_team_name", 

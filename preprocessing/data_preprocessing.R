@@ -39,6 +39,25 @@ season_years <- as.numeric(substr(rds_files, start = path_len - 11, stop = path_
 rds_files <- rds_files[season_years >= 20092010 & season_years <= 20242025]
 rds_files <- rds_files[!is.na(rds_files)]  # Drop any NA file paths
 
+# # Base file path where season folders (and the cache) will be created
+# base_path <- "C:/Users/schne/OneDrive/Grad School/SMU/Classes/STAT 6341/Project/M3/main/Data/"
+# 
+# # Set up the cache file (will store game data keyed by game_id)
+# cache_file <- paste0(base_path, "cache_games.rds")
+# if (file.exists(cache_file)) {
+#   cache_data <- readRDS(cache_file)
+# } else {
+#   cache_data <- list()
+# }
+# 
+# game_ids <- names(cache_data)
+# seasons <- as.numeric(substr(game_ids, 1, 4))
+# seasons
+# 
+# # Filter for target seasons
+# selected_ids <- game_ids[seasons > 2016]
+# filtered_cache <- cache_data[selected_ids] 
+
 # Empty lists to store data for each type
 all_plays       <- list()
 all_boxscore    <- list()
@@ -56,6 +75,9 @@ u <- 1  # Index for unplayed games
 for (rds_file in rds_files) {
   message(paste("Processing RDS file:", rds_file))
   season_data <- readRDS(rds_file)
+
+# for (game_id in names(filtered_cache)) {
+#   season_data <- list(filtered_cache[[game_id]])
   
   # Loop through each game in the season_data list
   for (i in seq_along(season_data)) {
@@ -2504,7 +2526,7 @@ columns_to_remove <- c( "goals", "assists", "points", "plusMinus", "pim",
                         "teams_loss", "team_win","team_loss",
                         "team_game_spread_opp", "lagged_avg_shift_toi", 
                         "lagged_n_shift", "lagged_game_toi", 
-                        "lagged_avg_n_shift_last_X_games")
+                        "lagged_avg_n_shift_last_X_games","team_game_spread")
 
 columns_to_remove <- unique(columns_to_remove)
 common_columns <- intersect(columns_to_remove, colnames(team_df))
@@ -2628,7 +2650,7 @@ rm(first_split)
 # Define recipe, model, and workflow
 team_recipe <- recipe(game_won ~ ., data = team_df_played) %>%
   step_rm(game_status) %>%
-  step_rm(team_game_spread) %>%
+  # step_rm(team_game_spread) %>%
   step_rm(game_won_spread) %>%
   step_rm(playerId) %>%
   step_rm(all_of(c("venueUTCOffset","venueLocation","away_team_name", 
@@ -2748,7 +2770,7 @@ team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v2.rds"))
 #Define recipe, model, and workflow
 team_recipe <- recipe(game_won_spread ~ ., data = team_df_played) %>%
   step_rm(game_status) %>%
-  step_rm(team_game_spread) %>%
+  # step_rm(team_game_spread) %>%
   step_rm(game_won) %>%
   step_rm(playerId) %>%
   step_rm(all_of(c("venueUTCOffset","venueLocation","away_team_name", 

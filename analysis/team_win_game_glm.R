@@ -322,10 +322,9 @@ cv_cal_mod <- cal_estimate_beta(train_model, truth = game_won,
 team_df_cal_preds <- train_model %>% cal_apply(cv_cal_mod)
 saveRDS(team_df_cal_preds, file = paste0(rds_files_path, "/Data/team_deployable_model_preds_glm.rds"))
 
-rm(team_df_played, train_preds, train_class)
+rm(train_preds, train_class)
 
 ### -----Step 2: Refit final model on correct training window-----
-
 team_df_train <- team_df_played %>%
   arrange(startTimeUTC, game_id) %>%
   group_by(game_id) %>%

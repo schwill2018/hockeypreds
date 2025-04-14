@@ -89,6 +89,9 @@ library(themis)
 
 setwd("C:/Users/schne/OneDrive/Grad School/SMU/Classes/STAT 6341/Project/M3/main")
 rds_files_path <- getwd()
+# team_recipe <- readRDS(paste0(rds_files_path, "/Data/team_recipe_spread.rds"))
+# team_splits <- readRDS(paste0(rds_files_path, "/Data/team_splits_v2.rds"))
+# team_fit <- readRDS(paste0(rds_files_path, "/Data/team_rocv_res_glm_fit_v2.rds"))
 team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v2.rds"))
 all_boxscore_df <- readRDS(paste0(rds_files_path, "/Data/combined_2009_2024_boxscore_v2.rds"))
 game_scores <- all_boxscore_df %>% distinct(game_id, teamId, away_score, home_score, season) %>%
@@ -96,17 +99,7 @@ game_scores <- all_boxscore_df %>% distinct(game_id, teamId, away_score, home_sc
 team_df_played <- team_df_played %>% inner_join(game_scores, by = c("game_id","teamId"))
 rm(all_boxscore_df,game_scores)
 
-# team_splits <- readRDS(paste0(rds_files_path, "/Data/team_splits_v2.rds"))
-# team_fit <- readRDS(paste0(rds_files_path, "/Data/team_rocv_res_glm_fit_v2.rds"))
-
 game_won_preds <- readRDS(paste0(rds_files_path, "/Data/team_deployable_model_preds_mlp.rds"))
-team_recipe <- readRDS(paste0(rds_files_path, "/Data/team_recipe_spread.rds"))
-
-rec_bake <- team_recipe %>% prep() %>% bake(., new_data =  NULL)
-colnames(rec_bake)
-rm(rec_bake)
-gc()
-
 team_df_played <- team_df_played %>% 
   bind_cols(game_won_preds[,c(".pred_1",".pred_0",".pred_class")]) %>%
   rename(game_won_.pred_1 = .pred_1, 
@@ -116,8 +109,36 @@ team_df_played <- team_df_played %>%
     favorite == 1 & abs(home_score - away_score) >= 2 ~ "1",   # Favorite covers if wins by 2 or more
     favorite == 0 & abs(home_score - away_score) <= 1 ~ "1",   # Underdog covers if loses by 1 or wins
     TRUE ~ "0")) %>%
+  mutate(favorite = factor(favorite, levels = c("1", "0"))) %>%
   mutate(game_won_spread = factor(game_won_spread, levels = c("1", "0"))) %>%
   select(-home_score, -away_score)
+saveRDS(team_df_played, file = paste0(rds_files_path, "/Data/team_df_played_mlp.rds"))
+
+team_recipe <- recipe(game_won_spread ~ ., data = team_df_played) %>%
+  step_rm(game_status) %>%
+  # step_rm(team_game_spread) %>%
+  step_rm(game_won) %>%
+  step_rm(playerId) %>%
+  step_rm(all_of(c("venueUTCOffset","venueLocation","away_team_name", 
+                   "away_team_locale","home_team_name", "home_team_locale", 
+                   "winning_team","winning_team_id"))) %>%
+  # Assign specific roles to ID columns
+  update_role(game_id, home_id, away_id, teamId, opp_teamId,
+              new_role = "ID") %>%
+  update_role(game_date, new_role = "DATE") %>%
+  update_role(startTimeUTC, new_role = "DATETIME") %>%
+  step_mutate(is_home = as.factor(is_home)) %>%
+  step_mutate(season = as.factor(season)) %>%
+  step_mutate(favorite = as.factor(favorite)) %>%
+  step_zv() %>%
+  step_normalize(all_numeric_predictors()) %>%
+  step_novel(all_nominal_predictors(), -is_home, -favorite) %>%
+  step_dummy(all_nominal_predictors())
+
+rec_bake <- team_recipe %>% prep() %>% bake(., new_data =  NULL)
+colnames(rec_bake)
+rm(rec_bake)
+gc()
 
 ### ----ROLLING CV (250 GAME SPLIT)-----
 # Create a game-level data frame
@@ -175,8 +196,8 @@ team_splits <- rsample::manual_rset(
 final_split <- team_splits$splits[[dim(team_splits)[1]]]
 team_splits <- team_splits[-dim(team_splits)[1],]
 
-saveRDS(final_split, file = paste0(rds_files_path, "/Data/team_final_split_250_spread_nn.rds"))
-saveRDS(team_splits, file = paste0(rds_files_path, "/Data/team_splits_250_spread_nn.rds"))
+saveRDS(final_split, file = paste0(rds_files_path, "/Data/team_final_split_250_spread_mlp.rds"))
+saveRDS(team_splits, file = paste0(rds_files_path, "/Data/team_splits_250_spread_mlp.rds"))
 rm(final_split)
 
 # Ensure team_splits is a valid rset object
@@ -203,6 +224,7 @@ set.seed(123)
 # Define MLP (Neural Network) Model
 # ---------------------------
 # Custom model-building function
+hu_s <- dim(juice(prep(team_recipe)))[2]
 build_custom_mlp <- function(hidden_units, penalty) {
   keras_model_sequential() %>%
     layer_dense(
@@ -215,7 +237,7 @@ build_custom_mlp <- function(hidden_units, penalty) {
     layer_dropout(rate = .3) %>% # Dropout layer
     # Second Hidden Layer
     layer_dense(
-      units = round(floor(sqrt(hidden_units))),
+      units = round(floor(2*sqrt(hidden_units))),
       activation = 'relu', kernel_regularizer = regularizer_l2(l2 = penalty)) %>%
     layer_batch_normalization() %>%
     layer_dropout(rate = .2) %>%  # Dropout layer
@@ -224,7 +246,7 @@ build_custom_mlp <- function(hidden_units, penalty) {
       units = round(floor(hidden_units/2)),
       activation = 'relu', kernel_regularizer = regularizer_l2(l2 = penalty)) %>%
     layer_batch_normalization() %>% 
-    layer_dropout(rate = 0.2) %>%  # Dropout layer
+    layer_dropout(rate = .3) %>%  # Dropout layer
     layer_dense(units = 1, activation = 'sigmoid') %>%
     compile(
       optimizer = optimizer_adam(learning_rate = 0.001),
@@ -240,7 +262,7 @@ build_custom_mlp <- function(hidden_units, penalty) {
 early_stop <- callback_early_stopping(
   monitor = "val_loss",
   # monitor = "loss", # Metric to monitor (val_loss not available)
-  patience = 15, # Number of epochs with no improvement
+  patience = 10, # Number of epochs with no improvement
   restore_best_weights = TRUE # Restore model weights from the epoch with the best value of the monitored metric
 )
 
@@ -314,7 +336,7 @@ mlp_param %>% extract_parameter_dials("epochs")
 control_settings <- control_bayes(
   save_pred = TRUE,
   verbose = TRUE,
-  no_improve = 15 # more tolerant to small improvements
+  no_improve = 10 # more tolerant to small improvements
 )
 
 #If after 10 consecutive iterations there's no improvement, optimization stops earl
@@ -338,7 +360,7 @@ mlp_res_rolling  <- tune_bayes(
   param_info = mlp_param,
   metrics = metric_set(roc_auc, accuracy, kap, brier_class, yardstick::spec, yardstick::sens),
   initial = 10,   # starts with 10 random points
-  iter = 30,      # 30 additional Bayesian iterations
+  iter =25,      # 30 additional Bayesian iterations
   control = control_settings
 )
 toc()
@@ -407,7 +429,7 @@ ggplot(team_metrics_best, aes(x = id, y = .estimate, color = .metric, group = .m
 # ---------------------------
 # Finalize the Workflow
 # ---------------------------
-final_split <- readRDS(paste0(rds_files_path, "/Data/team_final_split_250_spread.rds"))
+final_split <- readRDS(paste0(rds_files_path, "/Data/team_final_split_250_spread_mlp.rds"))
 final_mlp_wf <- finalize_workflow(team_wf_mlp, best_mlp_rolling)
 final_mlp_wf$fit$actions$model$spec
 rm(best_mlp_rolling,team_wf_mlp)
@@ -598,7 +620,7 @@ library(tensorflow)
 ### ----Fit your workflow on all training data for deployment-------------
 # This creates a fully fitted model using all of team_df_played
 rds_files_path <- getwd()
-team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v2.rds"))
+team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_mlp.rds"))
 final_mlp_wf <- readRDS(paste0(rds_files_path,"/Data/team_final_wf_mlp_spread.rds"))
 final_mlp_wf$fit$actions$model$spec
 
@@ -615,16 +637,16 @@ build_custom_mlp <- function(hidden_units, penalty) {
     layer_dropout(rate = .3) %>% # Dropout layer
     # Second Hidden Layer
     layer_dense(
-      units = round(floor(sqrt(hidden_units))),
+      units = round(floor(2*sqrt(hidden_units))),
       activation = 'relu', kernel_regularizer = regularizer_l2(l2 = penalty)) %>%
     layer_batch_normalization() %>%
-    layer_dropout(rate = .20) %>%  # Dropout layer
+    layer_dropout(rate = .2) %>%  # Dropout layer
     # Third Hidden Layer
     layer_dense(
       units = round(floor(hidden_units/2)),
       activation = 'relu', kernel_regularizer = regularizer_l2(l2 = penalty)) %>%
     layer_batch_normalization() %>% 
-    layer_dropout(rate = 0.2) %>%  # Dropout layer
+    layer_dropout(rate = 0.3) %>%  # Dropout layer
     layer_dense(units = 1, activation = 'sigmoid') %>%
     compile(
       optimizer = optimizer_adam(learning_rate = 0.001),
@@ -639,7 +661,7 @@ build_custom_mlp <- function(hidden_units, penalty) {
 early_stop <- callback_early_stopping(
   monitor = "val_loss",
   # monitor = "loss", # Metric to monitor (val_loss not available)
-  patience = 15, # Number of epochs with no improvement
+  patience = 10, # Number of epochs with no improvement
   restore_best_weights = TRUE # Restore model weights from the epoch with the best value of the monitored metric
 )
 
@@ -750,6 +772,8 @@ if (file.exists(log_file)) {
   unplayed_results$prediction_time <- as_datetime(unplayed_results$prediction_time)
   old_log$game_won <- as.factor(old_log$game_won)
   unplayed_results$game_won <- as.factor(unplayed_results$game_won)
+  unplayed_results$favorite <- as.factor(unplayed_results$favorite)
+  old_log$favorite <- as.factor(old_log$favorite)
   # # Keep rows from new predictions that are different on keys and prediction columns
   # new_to_add <- unplayed_results %>%
   #   # Use a join that compares both keys and prediction columns

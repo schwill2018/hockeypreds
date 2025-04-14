@@ -33,15 +33,10 @@ rm(all_boxscore_df,game_scores)
 
 # team_splits <- readRDS(paste0(rds_files_path, "/Data/team_splits_v2.rds"))
 # team_fit <- readRDS(paste0(rds_files_path, "/Data/team_rocv_res_glm_fit_v2.rds"))
+# team_recipe <- readRDS(paste0(rds_files_path, "/Data/team_recipe_spread.rds"))
+
 
 game_won_preds <- readRDS(paste0(rds_files_path, "/Data/team_deployable_model_preds_glm.rds"))
-team_recipe <- readRDS(paste0(rds_files_path, "/Data/team_recipe_spread.rds"))
-
-rec_bake <- team_recipe %>% prep() %>% bake(., new_data =  NULL)
-colnames(rec_bake)
-rm(rec_bake)
-gc()
-
 team_df_played <- team_df_played %>% 
   bind_cols(game_won_preds[,c(".pred_1",".pred_0",".pred_class")]) %>%
   rename(game_won_.pred_1 = .pred_1, 
@@ -51,8 +46,36 @@ team_df_played <- team_df_played %>%
     favorite == 1 & abs(home_score - away_score) >= 2 ~ "1",   # Favorite covers if wins by 2 or more
     favorite == 0 & abs(home_score - away_score) <= 1 ~ "1",   # Underdog covers if loses by 1 or wins
     TRUE ~ "0")) %>%
+  mutate(favorite = factor(favorite, levels = c("1", "0"))) %>%
   mutate(game_won_spread = factor(game_won_spread, levels = c("1", "0"))) %>%
   select(-home_score, -away_score)
+saveRDS(team_df_played, file = paste0(rds_files_path, "/Data/team_df_played_glm.rds"))
+
+team_recipe <- recipe(game_won_spread ~ ., data = team_df_played) %>%
+  step_rm(game_status) %>%
+  # step_rm(team_game_spread) %>%
+  step_rm(game_won) %>%
+  step_rm(playerId) %>%
+  step_rm(all_of(c("venueUTCOffset","venueLocation","away_team_name", 
+                   "away_team_locale","home_team_name", "home_team_locale", 
+                   "winning_team","winning_team_id"))) %>%
+  # Assign specific roles to ID columns
+  update_role(game_id, home_id, away_id, teamId, opp_teamId,
+              new_role = "ID") %>%
+  update_role(game_date, new_role = "DATE") %>%
+  update_role(startTimeUTC, new_role = "DATETIME") %>%
+  step_mutate(is_home = as.factor(is_home)) %>%
+  step_mutate(season = as.factor(season)) %>%
+  step_mutate(favorite = as.factor(favorite)) %>%
+  step_zv() %>%
+  step_normalize(all_numeric_predictors()) %>%
+  step_novel(all_nominal_predictors(), -is_home, -favorite) %>%
+  step_dummy(all_nominal_predictors())
+
+rec_bake <- team_recipe %>% prep() %>% bake(., new_data =  NULL)
+colnames(rec_bake)
+rm(rec_bake)
+gc()
 
 ### ----ROLLING CV (25 GAME SPLIT)-----
 # Create a game-level data frame
@@ -215,7 +238,7 @@ gc()
 # final_test <- assessment(final_split)
 
 registerDoParallel(cl)
-final_split <- readRDS(paste0(rds_files_path, "/Data/team_final_split_v2.rds"))
+final_split <- readRDS(paste0(rds_files_path, "/Data/team_final_split_spread.rds"))
 final_metrics_set <- metric_set(
   accuracy, 
   kap, 
@@ -405,7 +428,7 @@ library(themis)
 
 # Assume you already have these objects saved from your prior work:
 rds_files_path <- getwd()
-team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v2.rds"))
+team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_glm.rds"))
 team_wf_log <- readRDS(paste0(rds_files_path,"/Data/team_wf_log_spread.rds"))
 
 team_df_train <- team_df_played %>%
@@ -446,7 +469,6 @@ rm(team_df_played, train_preds, train_class,train_df)
 unplayed_games <- readRDS(paste0(rds_files_path, "/Data/team_df_v2.rds")) %>% 
   filter(game_status == "unplayed") %>% 
   select(-game_won_spread)
-
 unplayed_won_preds <- readRDS(paste0(rds_files_path, 
                                      "/Data/team_unplayed_games_predictions_v2.rds"))
 # unplayed_won_cal <- readRDS(paste0(rds_files_path,  "/Data/team_unplayed_games_preds_cal_v2.rds"))
@@ -509,6 +531,8 @@ if (file.exists(log_file)) {
   unplayed_results$prediction_time <- as_datetime(unplayed_results$prediction_time)
   old_log$game_won <- as.factor(old_log$game_won)
   unplayed_results$game_won <- as.factor(unplayed_results$game_won)
+  unplayed_results$favorite <- as.factor(unplayed_results$favorite)
+  old_log$favorite <- as.factor(old_log$favorite)
   # # Keep rows from new predictions that are different on keys and prediction columns
   # new_to_add <- unplayed_results %>%
   #   # Use a join that compares both keys and prediction columns

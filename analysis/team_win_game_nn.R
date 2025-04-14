@@ -91,7 +91,7 @@ rds_files_path <- getwd()
 team_recipe <- readRDS(paste0(rds_files_path, "/Data/team_recipe_goal_v2.rds"))
 team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v2.rds"))
 hu_s <- dim(juice(prep(team_recipe)))[2]
-team_df_played <- team_df_played %>% filter(season != 2020)
+# team_df_played <- team_df_played %>% filter(season != 2020)
 
 ### ----ROLLING CV (250 GAME SPLIT)-----
 # Create a game-level data frame
@@ -192,13 +192,13 @@ build_custom_mlp <- function(hidden_units, penalty) {
       units = round(floor(sqrt(hidden_units))),
       activation = 'relu', kernel_regularizer = regularizer_l2(l2 = penalty)) %>%
     layer_batch_normalization() %>%
-    layer_dropout(rate = .2) %>%  # Dropout layer
+    layer_dropout(rate = .15) %>%  # Dropout layer
     # Third Hidden Layer
     layer_dense(
       units = round(floor(hidden_units/2)),
       activation = 'relu', kernel_regularizer = regularizer_l2(l2 = penalty)) %>%
     layer_batch_normalization() %>% 
-    layer_dropout(rate = 0.2) %>%  # Dropout layer
+    layer_dropout(rate = 0.3) %>%  # Dropout layer
     layer_dense(units = 1, activation = 'sigmoid') %>%
     compile(
       optimizer = optimizer_adam(learning_rate = 0.001),
@@ -213,7 +213,7 @@ build_custom_mlp <- function(hidden_units, penalty) {
 early_stop <- callback_early_stopping(
   monitor = "val_loss",
   # monitor = "loss", # Metric to monitor (val_loss not available)
-  patience = 15, # Number of epochs with no improvement
+  patience = 10, # Number of epochs with no improvement
   restore_best_weights = TRUE # Restore model weights from the epoch with the best value of the monitored metric
 )
 
@@ -286,7 +286,7 @@ mlp_param %>% extract_parameter_dials("epochs")
 control_settings <- control_bayes(
   save_pred = TRUE,
   verbose = TRUE,
-  no_improve = 15          # more tolerant to small improvements
+  no_improve = 10          # more tolerant to small improvements
 )
 
 #If after 10 consecutive iterations there's no improvement, optimization stops earl
@@ -583,13 +583,13 @@ build_custom_mlp <- function(hidden_units, penalty) {
       units = round(floor(sqrt(hidden_units))),
       activation = 'relu', kernel_regularizer = regularizer_l2(l2 = penalty)) %>%
     layer_batch_normalization() %>%
-    layer_dropout(rate = .225) %>%  # Dropout layer
+    layer_dropout(rate = .15) %>%  # Dropout layer
     # Third Hidden Layer
     layer_dense(
       units = round(floor(hidden_units/2)),
       activation = 'relu', kernel_regularizer = regularizer_l2(l2 = penalty)) %>%
     layer_batch_normalization() %>% 
-    layer_dropout(rate = 0.15) %>%  # Dropout layer
+    layer_dropout(rate = 0.3) %>%  # Dropout layer
     layer_dense(units = 1, activation = 'sigmoid') %>%
     compile(
       optimizer = optimizer_adam(learning_rate = 0.001),
@@ -634,7 +634,7 @@ cv_cal_mod <- cal_estimate_beta(train_model, truth = game_won,
 
 team_df_cal_preds <- train_model %>% cal_apply(cv_cal_mod)
 saveRDS(team_df_cal_preds, file = paste0(rds_files_path, "/Data/team_deployable_model_preds_mlp.rds"))
-rm(team_df_played, train_preds, train_class)
+rm(train_preds, train_class)
 
 ### -----Step 2: Refit final model on correct training window-----
 team_df_train <- team_df_played %>%

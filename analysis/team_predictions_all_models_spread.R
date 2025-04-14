@@ -75,6 +75,8 @@ write_csv(combined_log, combined_log_path)
 # ---- STEP 2: UPDATE WITH ACTUAL OUTCOMES -------------------------------------------------
 # Load actual outcomes
 team_df <- readRDS(file.path(rds_files_path, "Data/team_df_v2.rds"))
+team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_glm.rds"))
+all_boxscore_df <- readRDS(paste0(rds_files_path, "/Data/combined_2009_2024_boxscore_v2.rds"))
 
 # Join actual outcomes to completed games in the combined log
 updated_combined_log <- combined_log %>%
@@ -85,13 +87,18 @@ updated_combined_log <- combined_log %>%
          away_id = as.character(combined_log$away_id),
          startTimeUTC = as.character(combined_log$startTimeUTC),
          prediction_time = as_datetime(combined_log$prediction_time)) %>%
-  left_join(team_df %>% select(game_id, teamId, game_won, startTimeUTC),
+  left_join(all_boxscore_df %>% select(game_id, teamId, startTimeUTC, home_score, away_score),
             by = c("game_id", "teamId","startTimeUTC")) %>%
+  mutate(game_won_spread = case_when(
+    favorite == 1 & abs(home_score - away_score) >= 2 ~ "1",   # Favorite covers if wins by 2 or more
+    favorite == 0 & abs(home_score - away_score) <= 1 ~ "1",   # Underdog covers if loses by 1 or wins
+    TRUE ~ "0")) %>%
   mutate(game_time = as.POSIXct(startTimeUTC, tz = "America/Chicago"),
     eligible_for_update = Sys.time() > (game_time + days(1)),
-    actual_outcome = if_else(eligible_for_update, game_won, NA)
+    actual_outcome = if_else(eligible_for_update, game_won_spread, NA)
   ) %>%
-  select(-startTimeUTC, -game_time, -game_won, -eligible_for_update)
+  select(-startTimeUTC, -game_time, -home_score, -away_score, -eligible_for_update)
 
 # Save updated log
 write_csv(updated_combined_log, combined_log_path)
+

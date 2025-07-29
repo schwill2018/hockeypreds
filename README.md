@@ -73,6 +73,9 @@ install.packages(c("dplyr", "tidymodels", "tidyverse", "ggplot2"))
 
 Currently not seeking external contributions, but suggestions and questions are welcome via GitHub issues.
 
+## Check out the Blog!
+https://schwill2018.github.io/hockeypreds/
+
 ## License
 
 Project is under [choose an appropriate license], with proprietary logic excluded from public release.

@@ -8,11 +8,60 @@ library(future)
 library(future.callr)
 library(tictoc)
 library(doParallel)
+# library(foreach)
 
 rds_files_path <- getwd()
-team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v2.rds"))
-team_recipe <- readRDS(paste0(rds_files_path, "/Data/team_recipe_goal_v2.rds"))
-team_splits <- readRDS(paste0(rds_files_path, "/Data/team_splits_v2.rds"))
+team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v3.rds"))
+team_recipe <- readRDS(paste0(rds_files_path, "/Data/team_recipe_goal_v3.rds"))
+team_splits <- readRDS(paste0(rds_files_path, "/Data/team_splits_v3.rds"))
+impt_df <- readRDS(paste0(rds_files_path, "/Data/team_fimp_tail.rds"))
+shap_knee <- readRDS(paste0(rds_files_path, "/Data/team_shap_knee_drop.rds"))
+pareto_drop <- readRDS(paste0(rds_files_path, "/Data/team_shap_pareto_drop.rds"))
+gc()
+
+# Update Recipe after Examining VI, ALE, and SHAP plots
+# to_remove <- tail(impt_df$feature, 137) %>% str_subset("season", negate = TRUE)
+to_remove <- shap_knee %>%
+  str_subset("season", negate = TRUE) %>%
+  str_subset("is_home", negate = TRUE) %>%
+  str_subset("gameType", negate = TRUE) %>%
+  str_subset("is_back_to_back", negate = TRUE) %>%
+  str_subset("b2b_win_ratio_lag", negate = TRUE) %>%
+  str_subset("no_feats_games", negate = TRUE)
+
+patterns <- c("rolling_home_distance","rolling_away_distance","tz_diff_game",
+              "home_venue_time_diff") #feature removals discovered
+pattern_regex <- paste(patterns, collapse = "|")
+cols_to_drop   <- grep(pattern_regex, names(team_df_played), value = TRUE)
+
+team_recipe <- recipe(game_won ~ ., data = team_df_played) %>%
+  step_rm(game_status) %>% #step_filter(gameType == 2) %>%
+  step_rm(game_won_spread) %>%
+  step_rm(playerId) %>%
+  step_rm(prior_rank, rolling_rank, rolling_points, cum_points, cum_rank) %>%
+  step_rm(all_of(c("venueUTCOffset","venueLocation","away_team_name", 
+                   "away_team_locale","home_team_name", "home_team_locale", 
+                   "winning_team","winning_team_id","venue_time", "game_time"))) %>%
+  step_rm(any_of(!!cols_to_drop)) %>%
+  # step_rm(any_of(!!to_remove)) %>%
+  step_rm(last_period_type) %>%
+  # Assign specific roles to ID columns
+  update_role(game_id, home_id, away_id, teamId, opp_teamId, new_role = "ID")%>%
+  update_role(game_date, new_role = "DATE") %>% 
+  update_role(startTimeUTC, new_role = "DATETIME") %>%
+  step_mutate(is_home = as.factor(is_home)) %>%
+  step_mutate(season = as.factor(season)) %>%
+  step_mutate(gameType = as.factor(gameType)) %>%
+  step_mutate(is_back_to_back = as.factor(is_back_to_back)) %>%
+  step_mutate(no_feats_games = as.factor(no_feats_games)) %>%
+  step_mutate(elo_class = as.factor(elo_class)) %>%
+  step_zv() %>%
+  step_normalize(all_numeric_predictors()) %>%
+  step_novel(all_nominal_predictors(), -is_home, -gameType, -is_back_to_back,
+             -no_feats_games,elo_class) %>%
+  step_dummy(all_nominal_predictors()) 
+rec_bake <- team_recipe %>% prep() %>% bake(new_data = NULL)
+colnames(rec_bake)
 gc()
 
 # ### ----ROLLING CV (250 GAME SPLIT)-----
@@ -105,18 +154,40 @@ registerDoParallel(cl)
 # print(para_threads)
 
 # Random Forest for Rolling CV
-team_rf_rolling <- rand_forest(mtry = tune(), min_n = tune(), trees = 350)%>%
+team_rf_rolling <- rand_forest(mtry = tune(), min_n = tune(), trees = tune())%>%
   set_mode("classification") %>%
-  set_engine("ranger")
+  set_engine("ranger",
+             importance  = "permutation")
 
 
 # ---------------------------
 # Create Workflow
 # ---------------------------
+# team_recipe2 <- recipe(game_won ~ ., data = team_df_played) %>%
+#   step_rm(game_status) %>%
+#   # step_rm(team_game_spread) %>%
+#   step_rm(game_won_spread) %>%
+#   step_rm(playerId) %>%
+#   step_rm(all_of(c("venueUTCOffset","venueLocation","away_team_name", 
+#                    "away_team_locale","home_team_name", "home_team_locale", 
+#                    "winning_team","winning_team_id"))) %>% #variable performance test recipe
+#   step_rm(matches("7")) %>%
+#   # Assign specific roles to ID columns
+#   update_role(game_id, home_id, away_id, teamId, opp_teamId,
+#               new_role = "ID") %>%
+#   update_role(game_date, new_role = "DATE") %>%
+#   update_role(startTimeUTC, new_role = "DATETIME") %>%
+#   step_mutate(is_home = as.factor(is_home)) %>%
+#   step_mutate(season = as.factor(season)) %>%
+#   step_zv() %>%
+#   step_normalize(all_numeric_predictors()) %>%
+#   step_novel(all_nominal_predictors(), -is_home) %>%
+#   step_dummy(all_nominal_predictors()) 
+
 team_wf_rf_rolling <- workflow() %>%
   add_recipe(team_recipe) %>%
   add_model(team_rf_rolling)
-
+rec_bake <- team_recipe %>% prep() %>% bake(., new_data =  NULL)
 
 # # ---------------------------
 # # Define Hyperparameter Grids
@@ -125,22 +196,66 @@ team_wf_rf_rolling <- workflow() %>%
 # 
 upper_g <- ceiling(sqrt(length(colnames(team_df_played))))
 upper_min_n <- upper_g - 2
+max_feats <- (length(rec_bake) - dim(team_recipe$var_info %>%
+                                       filter(role != "predictor") %>%
+                                       select(variable) %>%
+                                       unique())[1]) %>% sqrt() %>% ceiling()
+min_feats <- (length(rec_bake) - dim(team_recipe$var_info %>%
+                                       filter(role != "predictor") %>%
+                                       select(variable) %>%
+                                       unique())[1]) %>% log2() %>% floor() +1
+max_min_n <- ceiling(sqrt(3611))
+min_min_n <- 5
 rf_grid <- grid_regular(
-  mtry(range = c(3,23)),
-  min_n(range = c(5,15)),
-  levels = 3
+  mtry(range = c(min_feats,max_feats)), #c(3,23)
+  min_n(range = c(min_min_n,max_min_n)), #c(5,15)
+  levels = 3)
+
+rf_params <- parameters(team_wf_rf_rolling) %>%
+  update(
+    mtry    = mtry(range = c(min_feats, max_feats)),
+    min_n   = min_n(range = c(min_min_n, max_min_n)),
+    trees   = trees(range = c(75, 575))       # adjust range to taste
+  )
+rf_params
+
+set.seed(123)                    # reproducible
+rf_grid_lh <- grid_space_filling(
+  rf_params,
+  type = "latin_hypercube",
+  size = 7                 # number of Latin-hypercube points
 )
 
+# rf_ctrl <- control_bayes(
+#   verbose = TRUE,
+#   save_pred = TRUE,
+#   allow_par = TRUE,
+#   parallel_over = "resamples",
+#   no_improve = 2           # stop if no improvement in 5 consecutive iterations
+# )
+# set.seed(123)
+# rf_res_rolling_bayes <- tune_bayes(
+#   object     = team_wf_rf_rolling,
+#   resamples  = team_splits,
+#   param_info = rf_params,
+#   initial    = 5,            # 10 random initial points
+#   iter       = 3,            # up to 20 Bayesian iterations
+#   metrics    = metric_set(accuracy,kap,roc_auc,brier_class,
+#                           yardstick::spec,
+#                           yardstick::sens),
+#   control = rf_ctrl)
+# stopCluster(cl)
 rm(team_df_played)
+
 # # ---------------------------
 # # Define Grid Control
 # # ---------------------------
 control_settings <- control_grid(
+  verbose = TRUE,   # prints progress
   save_pred = TRUE,
   allow_par = TRUE,
   parallel_over = "resamples"
 )
-#
 
 # # ---------------------------
 # # Fit Resamples
@@ -148,22 +263,27 @@ control_settings <- control_grid(
 # # Tuning sets for RF on rolling CV
 tic()
 rf_res_rolling <- tune_grid(
-  team_wf_rf_rolling,
+  team_wf_rf_rolling, 
   resamples = team_splits,
-  grid = rf_grid,
-  metrics = metric_set(accuracy, kap, roc_auc, brier_class, yardstick::spec, yardstick::sens),
+  grid = rf_grid_lh,
+  metrics = metric_set(accuracy, 
+                       kap,
+                       roc_auc,
+                       brier_class,
+                       yardstick::spec,
+                       yardstick::sens),
   control = control_settings
 )
 toc()
-
+stopCluster(cl)
 # ---------------------------
 #  Save Random Forest Tuning Results
 # ---------------------------
-saveRDS(rf_res_rolling, file = paste0(rds_files_path, "/Data/team_rocv_res_rf_fit_v2.rds"))
-saveRDS(team_wf_rf_rolling, file = paste0(rds_files_path, "/Data/team_wf_rf.rds"))
+saveRDS(rf_res_rolling, file = paste0(rds_files_path, "/Data/team_rocv_res_rf_fit_v3.rds"))
+saveRDS(team_wf_rf_rolling, file = paste0(rds_files_path, "/Data/team_wf_rf_v3.rds"))
 
-rf_res_rolling <- readRDS(paste0(rds_files_path, "/Data/team_rocv_res_rf_fit_v2.rds"))
-team_wf_rf_rolling <- readRDS(paste0(rds_files_path, "/Data/team_wf_rf.rds"))
+rf_res_rolling <- readRDS(paste0(rds_files_path, "/Data/team_rocv_res_rf_fit_v3.rds"))
+team_wf_rf_rolling <- readRDS(paste0(rds_files_path, "/Data/team_wf_rf_v3.rds"))
 gc()
 
 team_metrics <- rf_res_rolling %>% collect_metrics(summarize = FALSE) %>%
@@ -190,9 +310,13 @@ best_rf_rolling <- select_best(rf_res_rolling, metric = "roc_auc")
 
 best_mtry <- best_rf_rolling %>% pull(mtry)
 best_min_n <- best_rf_rolling %>% pull(min_n)
-
+team_metrics <- rf_res_rolling %>% collect_metrics(summarize = FALSE)
 team_metrics_best <- team_metrics %>% 
   filter(mtry == best_mtry, min_n == best_min_n)
+team_metrics_avg <- team_metrics_best %>%
+  group_by(.metric) %>%
+  summarize(mean_est = mean(.estimate, na.rm = TRUE), .groups = "drop")
+team_metrics_avg 
 
 # Plot the per-split performance for the best model
 ggplot(team_metrics_best, aes(x = id, y = .estimate, color = .metric, group = .metric)) +
@@ -214,7 +338,7 @@ final_rf_wf <- finalize_workflow(team_wf_rf_rolling, best_rf_rolling)
 # Final Model Evaluation with last_fit()
 # ---------------------------
 final_metrics_set <- metric_set(accuracy, kap, roc_auc, brier_class, yardstick::spec, yardstick::sens)
-final_split <- readRDS(paste0(rds_files_path, "/Data/team_final_split_v2.rds"))
+final_split <- readRDS(paste0(rds_files_path, "/Data/team_final_split_v3.rds"))
 
 final_rf_fit <- final_rf_wf %>%
   last_fit(final_split, 
@@ -228,10 +352,10 @@ print(final_rf_metrics)
 
 final_rf_predictions <- collect_predictions(final_rf_fit)
 
-saveRDS(final_rf_wf, file = paste0(rds_files_path, "/Data/team_final_wf_rf.rds"))
-saveRDS(final_rf_fit, file = paste0(rds_files_path, "/Data/team_rocv_final_rf_fit_v2.rds"))
-saveRDS(final_rf_metrics, file = paste0(rds_files_path, "/Data/team_rocv_final_rf_metrics_v2.rds"))
-saveRDS(final_rf_predictions, file = paste0(rds_files_path, "/Data/team_rocv_final_rf_predictions_v2.rds"))
+saveRDS(final_rf_wf, file = paste0(rds_files_path, "/Data/team_final_wf_rf_v3.rds"))
+saveRDS(final_rf_fit, file = paste0(rds_files_path, "/Data/team_rocv_final_rf_fit_v3.rds"))
+saveRDS(final_rf_metrics, file = paste0(rds_files_path, "/Data/team_rocv_final_rf_metrics_v3.rds"))
+saveRDS(final_rf_predictions, file = paste0(rds_files_path, "/Data/team_rocv_final_rf_predictions_v3.rds"))
 
 rm(final_rf_fit)
 rm(final_rf_metrics)
@@ -241,11 +365,9 @@ rm(rf_res_rolling)
 # Stop the Parallel Cluster
 # ---------------------------
 stopCluster(cl)
-
 gc()
 
-
-## ----MODEL CALIBRATION (PENALIZED REGRESSION)----------------------------------------------------------------------------------------------------------------------------------
+## ----MODEL CALIBRATION (RANDOM FOREST)----------------------------------------------------------------------------------------------------------------------------------
 library(tidymodels)
 library(zoo)
 library(tidyverse)
@@ -264,8 +386,9 @@ library(ranger)
 
 rds_files_path <- getwd()
 team_wf_rf<- readRDS(paste0(rds_files_path,"/Data/team_wf_rf.rds"))
-team_fit <- readRDS(paste0(rds_files_path, "/Data/team_rocv_res_rf_fit_v2.rds"))
-final_predictions <- readRDS(paste0(rds_files_path, "/Data/team_rocv_final_rf_predictions_v2.rds"))
+team_fit <- readRDS(paste0(rds_files_path, "/Data/team_rocv_res_rf_fit_v3.rds"))
+final_predictions <- readRDS(paste0(rds_files_path, "/Data/team_rocv_final_rf_predictions_v3.rds"))
+final_rf_metrics <- readRDS(paste0(rds_files_path, "/Data/team_rocv_final_rf_metrics_v3.rds"))
 gc()
 
 # Define metric set once
@@ -322,7 +445,7 @@ cal_plot_breaks(final_predictions, truth = game_won,
 ### ------Calibrate the Model on the training data---------------------
 cv_preds_clean <- cv_preds_clean %>%
   filter(!is.na(.pred_1), !is.na(game_won)) #%>%
-  # mutate(.pred_1 = pmin(pmax(.pred_1, 0.00001), 0.99999))
+# mutate(.pred_1 = pmin(pmax(.pred_1, 0.00001), 0.99999))
 
 cv_cal_mod <- cal_estimate_beta(cv_preds_clean, truth = game_won)
 train_beta_cal <- cv_preds_clean %>% cal_apply(cv_cal_mod)
@@ -378,10 +501,7 @@ rf_test_facet
 # Save final metrics and predictions
 saveRDS(final_fit, file = paste0(rds_files_path, "/Data/team_rocv_final_rf_fit_cal.rds"))
 saveRDS(final_metrics_1, file = paste0(rds_files_path, "/Data/team_rocv_final_rf_metrics_cal.rds"))
-
 gc()
-
-
 
 ## ----PREDICT ON FUTURE GAMES-----------------------------------------------------------------------------------------------------------------------------------------------
 library(tidyverse)
@@ -406,9 +526,22 @@ num_cores <- detectCores()
 cl <- makeCluster(max(1,num_cores-4))
 registerDoParallel(cl)
 
-### -----Step 1: Fit your workflow on all training data for deployment-------------
-# 1. Create a fully fitted model using all of team_df_played
-final_model <- fit(final_rf_wf, data = team_df_played)
+### -----Step 1: Refit final model on correct training window-----
+team_df_train <- team_df_played %>%
+  arrange(startTimeUTC, game_id) %>%
+  group_by(game_id) %>%
+  dplyr::slice(1) %>%  # one row per game (assuming team-based rows)
+  ungroup() %>%
+  tail(3611) %>%
+  pull(game_id)
+
+# Filter training rows from team_df_played
+team_df_played <- team_df_played %>%
+  filter(game_id %in% team_df_train)
+#Sanity check
+length(unique(team_df_played$game_id))
+
+final_model <- fit(final_xgb_wf, data = team_df_played)
 train_preds <- predict(final_model, new_data = team_df_played, type = "prob")
 train_class <- predict(final_model, new_data = team_df_played) 
 train_model <- train_preds %>%
@@ -421,23 +554,9 @@ team_df_cal_preds <- train_model %>% cal_apply(cv_cal_mod)
 saveRDS(team_df_cal_preds, file = paste0(rds_files_path, "/Data/team_deployable_model_preds_rf.rds"))
 rm(train_preds, train_class)
 
-### -----Step 2: Refit final model on correct training window-----
-team_df_train <- team_df_played %>%
-  arrange(startTimeUTC, game_id) %>%
-  group_by(game_id) %>%
-  slice(1) %>%  # one row per game (assuming team-based rows)
-  ungroup() %>%
-  tail(3611) %>%
-  pull(game_id)
-
-# Filter training rows from team_df_played
-team_df_played <- team_df_played %>%
-  filter(game_id %in% team_df_train)
-#Sanity check
-length(unique(team_df_played$game_id))
-# Optionally, save this deployable model:
+# save this deployable model:
 saveRDS(final_model, file = paste0(rds_files_path, "/Data/team_deployable_model_rf.rds"))
-rm(final_rf_wf)
+rm(final_xgb_wf)
 
 ### ---# Step 3: Predict on Unplayed Games Using the Fully Fitted Model and----
 ### ----Preprocess the unplayed games data-----------------

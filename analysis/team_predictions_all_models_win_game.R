@@ -85,13 +85,14 @@ updated_combined_log <- combined_log %>%
          away_id = as.character(combined_log$away_id),
          startTimeUTC = as.character(combined_log$startTimeUTC),
          prediction_time = as_datetime(combined_log$prediction_time)) %>%
-  left_join(team_df %>% select(game_id, teamId, game_won, startTimeUTC),
-            by = c("game_id", "teamId","startTimeUTC")) %>%
-  mutate(game_time = as.POSIXct(startTimeUTC, tz = "America/Chicago"),
+  left_join(team_df %>% select(game_id, teamId, game_won, startTimeUTC) %>%
+              rename(startTimeUTC_curr = startTimeUTC),
+            by = c("game_id", "teamId")) %>%
+  mutate(game_time = as.POSIXct(startTimeUTC_curr, tz = "America/Chicago"),
     eligible_for_update = Sys.time() > (game_time + days(1)),
-    actual_outcome = if_else(eligible_for_update, game_won, NA)
-  ) %>%
-  select(-startTimeUTC, -game_time, -game_won, -eligible_for_update)
+    actual_outcome = if_else(eligible_for_update, game_won, NA)) #%>%
+  # select(-startTimeUTC, -game_time, -game_won, -eligible_for_update)
 
 # Save updated log
 write_csv(updated_combined_log, combined_log_path)
+

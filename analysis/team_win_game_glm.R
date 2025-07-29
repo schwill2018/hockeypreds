@@ -7,28 +7,65 @@ library(tictoc)
 library(finetune)
 library(naniar)
 library(doParallel)
-library(dplyr)
-library(purrr)
-library(themis)
-library(tidymodels)
-library(zoo)
-library(tidyverse)
-library(glmnet)
-library(tictoc)
-library(finetune)
-library(naniar)
-library(doParallel)
 library(geosphere)
 library(dplyr)
 library(purrr)
 library(themis)
 
 rds_files_path <- getwd()
-team_recipe <- readRDS(paste0(rds_files_path, "/Data/team_recipe_goal_v2.rds"))
-team_splits <- readRDS(paste0(rds_files_path, "/Data/team_splits_v2.rds"))
-rec_bake <- team_recipe %>% prep() %>% bake(., new_data =  NULL)
-colnames(rec_bake)
+team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v3.rds"))
+team_recipe <- readRDS(paste0(rds_files_path, "/Data/team_recipe_goal_v3.rds"))
+team_splits <- readRDS(paste0(rds_files_path, "/Data/team_splits_v4.rds"))
+impt_df <- readRDS(paste0(rds_files_path, "/Data/team_fimp_tail.rds"))
+shap_knee <- readRDS(paste0(rds_files_path, "/Data/team_shap_knee_drop.rds"))
+pareto_drop <- readRDS(paste0(rds_files_path, "/Data/team_shap_pareto_drop.rds"))
 gc()
+
+# Update Recipe after Examining VI, ALE, and SHAP plots
+# to_remove <- tail(impt_df$feature, 137) %>% str_subset("season", negate = TRUE)
+to_remove <- shap_knee %>%
+  str_subset("season", negate = TRUE) %>%
+  str_subset("is_home", negate = TRUE) %>%
+  str_subset("gameType", negate = TRUE) %>%
+  str_subset("is_back_to_back", negate = TRUE) %>%
+  str_subset("b2b_win_ratio_lag", negate = TRUE) %>%
+  str_subset("no_feats_games", negate = TRUE)
+
+patterns <- c("rolling_home_distance","rolling_away_distance","tz_diff_game",
+              "home_venue_time_diff") #feature removals discovered
+pattern_regex <- paste(patterns, collapse = "|")
+cols_to_drop <- grep(pattern_regex, names(team_df_played), value = TRUE)
+class_to_drop <- grep("_class", names(team_df_played), value = TRUE)
+
+team_recipe <- recipe(game_won ~ ., data = team_df_played) %>%
+  step_rm(game_status) %>% #step_filter(gameType == 2) %>%
+  step_rm(game_won_spread) %>%
+  step_rm(playerId) %>%
+  step_rm(prior_rank, rolling_rank, rolling_points, cum_points, cum_rank) %>%
+  step_rm(all_of(c("venueUTCOffset","venueLocation","away_team_name", 
+                   "away_team_locale","home_team_name", "home_team_locale", 
+                   "winning_team","winning_team_id","venue_time", "game_time"))) %>%
+  step_rm(any_of(!!cols_to_drop)) %>%
+  step_rm(any_of(!!class_to_drop)) %>%
+  # step_rm(any_of(!!to_remove)) %>%
+  step_rm(last_period_type) %>%
+  # Assign specific roles to ID columns
+  update_role(game_id, home_id, away_id, teamId, opp_teamId, new_role = "ID")%>%
+  update_role(game_date, new_role = "DATE") %>% 
+  update_role(startTimeUTC, new_role = "DATETIME") %>%
+  step_mutate(is_home = as.factor(is_home)) %>%
+  step_mutate(season = as.factor(season)) %>%
+  step_mutate(gameType = as.factor(gameType)) %>%
+  step_mutate(is_back_to_back = as.factor(is_back_to_back)) %>%
+  step_mutate(no_feats_games = as.factor(no_feats_games)) %>%
+  # step_mutate(elo_class = as.factor(elo_class)) %>%
+  step_zv() %>%
+  step_normalize(all_numeric_predictors()) %>%
+  step_novel(all_nominal_predictors(), -is_home, -gameType, -is_back_to_back,
+             -no_feats_games) %>% #elo_class
+  step_dummy(all_nominal_predictors()) 
+rec_bake <- team_recipe %>% prep() %>% bake(new_data = NULL)
+colnames(rec_bake)
 
 # Set up parallel backend
 num_cores <- detectCores()
@@ -39,6 +76,9 @@ team_log <- logistic_reg() %>%
   set_mode("classification") %>% 
   set_engine("glm")
 
+
+team_recipe2 <- team_recipe %>% #variable performance test recipe
+  step_rm(matches("3"))
 team_wf_log <- workflow() %>% 
   add_recipe(team_recipe) %>% 
   add_model(team_log)
@@ -71,14 +111,15 @@ end_t - start_t
 # print(res_coefficients)
 
 team_fit %>% collect_metrics()
-
+gc()
+stopCluster(cl)
 #Save Memory
 rm(team_splits)
 gc()
 
 # Collect metrics from rolling CV
-saveRDS(team_wf_log, file = paste0(rds_files_path, "/Data/team_wf_log_v2.rds"))
-saveRDS(team_fit, file = paste0(rds_files_path, "/Data/team_rocv_res_glm_fit_v2.rds"))
+saveRDS(team_wf_log, file = paste0(rds_files_path, "/Data/team_wf_log_v4.rds"))
+saveRDS(team_fit, file = paste0(rds_files_path, "/Data/team_rocv_res_glm_fit_v4.rds"))
 
 library(ggplot2)
 
@@ -111,7 +152,7 @@ gc()
 # final_test <- assessment(final_split)
 
 registerDoParallel(cl)
-final_split <- readRDS(paste0(rds_files_path, "/Data/team_final_split_v2.rds"))
+final_split <- readRDS(paste0(rds_files_path, "/Data/team_final_split_v3.rds"))
 final_metrics_set <- metric_set(
   accuracy, 
   kap, 
@@ -135,9 +176,9 @@ final_predictions <- final_fit %>% collect_predictions()
 stopCluster(cl)
 
 # Save final metrics and predictions
-saveRDS(final_fit, file = paste0(rds_files_path, "/Data/team_rocv_final_glm_fit_v2.rds"))
-saveRDS(final_metrics, file = paste0(rds_files_path, "/Data/team_rocv_final_glm_metrics_v2.rds"))
-saveRDS(final_predictions, file = paste0(rds_files_path, "/Data/team_rocv_final_glm_predictions_v2.rds"))
+saveRDS(final_fit, file = paste0(rds_files_path, "/Data/team_rocv_final_glm_fit_v3.rds"))
+saveRDS(final_metrics, file = paste0(rds_files_path, "/Data/team_rocv_final_glm_metrics_v3.rds"))
+saveRDS(final_predictions, file = paste0(rds_files_path, "/Data/team_rocv_final_glm_predictions_v3.rds"))
 
 
 ###-----Inspect Final Metrics and Predictions-----
@@ -170,9 +211,9 @@ library(betacal)
 library(themis)
 
 rds_files_path <- getwd()
-team_wf_log<- readRDS(paste0(rds_files_path,"/Data/team_wf_log_v2.rds"))
-team_fit <- readRDS(paste0(rds_files_path, "/Data/team_rocv_res_glm_fit_v2.rds"))
-final_predictions <- readRDS(paste0(rds_files_path, "/Data/team_rocv_final_glm_predictions_v2.rds"))
+team_wf_log<- readRDS(paste0(rds_files_path,"/Data/team_wf_log_v3.rds"))
+team_fit <- readRDS(paste0(rds_files_path, "/Data/team_rocv_res_glm_fit_v3.rds"))
+final_predictions <- readRDS(paste0(rds_files_path, "/Data/team_rocv_final_glm_predictions_v3.rds"))
 gc()
 
 # Define metric set once
@@ -246,7 +287,7 @@ log_train_facet
 rm(team_fit)
 ### -----Predict on the Final Holdout Split------------------
 # Apply the calibration model to final predictions
-final_split <- readRDS(paste0(rds_files_path, "/Data/team_final_split_v2.rds"))
+final_split <- readRDS(paste0(rds_files_path, "/Data/team_final_split_v3.rds"))
 
 final_cal_preds <- final_predictions %>% cal_apply(cv_cal_mod)
 final_fit <- assessment(final_split) %>% 
@@ -279,8 +320,8 @@ log_test_facet <- final_cal_preds %>%
 log_test_facet
 
 # Save final metrics and predictions
-saveRDS(final_fit, file = paste0(rds_files_path, "/Data/team_rocv_final_glm_fit_cal_v2.rds"))
-saveRDS(final_metrics_1, file = paste0(rds_files_path, "/Data/team_rocv_final_glm_metrics_cal_v2.rds"))
+saveRDS(final_fit, file = paste0(rds_files_path, "/Data/team_rocv_final_glm_fit_cal_v3.rds"))
+saveRDS(final_metrics_1, file = paste0(rds_files_path, "/Data/team_rocv_final_glm_metrics_cal_v3.rds"))
 rm(team_wf_log)
 gc()
 
@@ -299,8 +340,8 @@ library(themis)
 
 # Assume you already have these objects saved from your prior work:
 rds_files_path <- getwd()
-team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v2.rds"))
-team_wf_log <- readRDS(paste0(rds_files_path,"/Data/team_wf_log_v2.rds"))
+team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v3.rds"))
+team_wf_log <- readRDS(paste0(rds_files_path,"/Data/team_wf_log_v3.rds"))
 
 num_cores <- detectCores()
 cl <- makeCluster(max(1,num_cores-4))
@@ -364,7 +405,7 @@ unplayed_results <- unplayed_games %>%
   mutate(pred_probability = unplayed_predictions$.pred_1,
          pred_class = unplayed_class$.pred_class,
          cal_probability = unplayed_cal_preds$.pred_1,
-         cal_class = ifelse(cal_probability > .50, 1, 0),
+         cal_class = ifelse(cal_probability >= .50, 1, 0),
          prediction_time = Sys.time(),
          model_version = "glm_v_25",   # define this near the top of your script
          # Initially, actual outcome is unknown

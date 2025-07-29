@@ -7,54 +7,8 @@
 # Load the reticulate package
 library(reticulate)
 
-# # Replace the string below with your actual 3.11 path
-# use_python("C:/Users/schne/AppData/Local/r-reticulate/r-reticulate/pyenv/pyenv-win/versions/3.11.0/python.exe", required = TRUE)
-# 
-# # Verify
-# py_config()
-# 
 # # Verify that the HOME environment variable is set correctly
 print(path.expand("~"))  # Expected output: "C:/Users/schne"
-# 
-# # Clear any interfering environment variables
-# Sys.unsetenv("VIRTUAL_ENV")
-# Sys.unsetenv("RETICULATE_PYTHON")
-
-# # Optionally, remove these variables from startup files
-# renviron_path <- "~/.Renviron"
-# if (file.exists(renviron_path)) {
-#   renviron_content <- readLines(renviron_path)
-#   renviron_content <- renviron_content[!grepl("VIRTUAL_ENV|RETICULATE_PYTHON", renviron_content)]
-#   writeLines(renviron_content, renviron_path)
-# }
-# 
-# rprofile_path <- "~/.Rprofile"
-# if (file.exists(rprofile_path)) {
-#   rprofile_content <- readLines(rprofile_path)
-#   rprofile_content <- rprofile_content[!grepl("VIRTUAL_ENV|RETICULATE_PYTHON", rprofile_content)]
-#   writeLines(rprofile_content, rprofile_path)
-# }
-# 
-# 
-# # Ensure that the .virtualenvs directory exists in your new home directory
-# venv_dir <- file.path(path.expand("~"), ".virtualenvs")
-# if (!dir.exists(venv_dir)) {
-#   dir.create(venv_dir, recursive = TRUE)
-# }
-# print(venv_dir)  # Should now be "C:/Users/schne/.virtualenvs"
-# 
-# # Create the virtual environment if it doesn't exist
-# if (!virtualenv_exists("r-tensorflow")) {
-#   message("Environment does not exist! Creating now...")
-#   virtualenv_create("r-tensorflow", python = py_config()$python)
-# }
-# 
-# # Step 6: Install the required Python packages into the virtual environment
-# py_install(
-#   packages = c("numpy==1.24.3", "tensorflow==2.13.0", "keras==2.13.1"),
-#   envname = "r-tensorflow",
-#   pip = TRUE
-# )
 
 # Step 7: Activate the virtual environment
 use_virtualenv("C:/Users/schne/.virtualenvs/r-tensorflow", required = TRUE)
@@ -88,89 +42,139 @@ library(tensorflow)
 
 setwd("C:/Users/schne/OneDrive/Grad School/SMU/Classes/STAT 6341/Project/M3/main")
 rds_files_path <- getwd()
-team_recipe <- readRDS(paste0(rds_files_path, "/Data/team_recipe_goal_v2.rds"))
-team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v2.rds"))
+team_recipe <- readRDS(paste0(rds_files_path, "/Data/team_recipe_goal_v3.rds"))
+team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v3.rds"))
+team_splits <- readRDS(paste0(rds_files_path, "/Data/team_splits_v3.rds"))
 hu_s <- dim(juice(prep(team_recipe)))[2]
+impt_df <- readRDS(paste0(rds_files_path, "/Data/team_fimp_tail.rds"))
+shap_knee <- readRDS(paste0(rds_files_path, "/Data/team_shap_knee_drop.rds"))
+pareto_drop <- readRDS(paste0(rds_files_path, "/Data/team_shap_pareto_drop.rds"))
+gc()
+
+# Update Recipe after Examining VI, ALE, and SHAP plots
+# to_remove <- tail(impt_df$feature, 137) %>% str_subset("season", negate = TRUE)
+to_remove <- shap_knee %>%
+  str_subset("season", negate = TRUE) %>%
+  str_subset("is_home", negate = TRUE) %>%
+  str_subset("gameType", negate = TRUE) %>%
+  str_subset("is_back_to_back", negate = TRUE) %>%
+  str_subset("b2b_win_ratio_lag", negate = TRUE) %>%
+  str_subset("no_feats_games", negate = TRUE)
+
+patterns <- c("rolling_home_distance","rolling_away_distance","tz_diff_game",
+              "home_venue_time_diff") #feature removals discovered
+pattern_regex <- paste(patterns, collapse = "|")
+cols_to_drop   <- grep(pattern_regex, names(team_df_played), value = TRUE)
+
+team_recipe <- recipe(game_won ~ ., data = team_df_played) %>%
+  step_rm(game_status) %>% #step_filter(gameType == 2) %>%
+  step_rm(game_won_spread) %>%
+  step_rm(playerId) %>%
+  step_rm(prior_rank, rolling_rank, rolling_points, cum_points, cum_rank) %>%
+  step_rm(all_of(c("venueUTCOffset","venueLocation","away_team_name", 
+                   "away_team_locale","home_team_name", "home_team_locale", 
+                   "winning_team","winning_team_id","venue_time", "game_time"))) %>%
+  step_rm(any_of(!!cols_to_drop)) %>%
+  # step_rm(any_of(!!to_remove)) %>%
+  step_rm(last_period_type) %>%
+  # Assign specific roles to ID columns
+  update_role(game_id, home_id, away_id, teamId, opp_teamId, new_role = "ID")%>%
+  update_role(game_date, new_role = "DATE") %>% 
+  update_role(startTimeUTC, new_role = "DATETIME") %>%
+  step_mutate(is_home = as.factor(is_home)) %>%
+  step_mutate(season = as.factor(season)) %>%
+  step_mutate(gameType = as.factor(gameType)) %>%
+  step_mutate(is_back_to_back = as.factor(is_back_to_back)) %>%
+  step_mutate(no_feats_games = as.factor(no_feats_games)) %>%
+  step_mutate(elo_class = as.factor(elo_class)) %>%
+  step_zv() %>%
+  step_normalize(all_numeric_predictors()) %>%
+  step_novel(all_nominal_predictors(), -is_home, -gameType, -is_back_to_back,
+             -no_feats_games,elo_class) %>%
+  step_dummy(all_nominal_predictors()) 
+rec_bake <- team_recipe %>% prep() %>% bake(new_data = NULL)
+colnames(rec_bake)
+
 # team_df_played <- team_df_played %>% filter(season != 2020)
 
-### ----ROLLING CV (250 GAME SPLIT)-----
-# Create a game-level data frame
-game_level_df <- team_df_played %>%
-  distinct(game_id, game_date, startTimeUTC) %>%
-  arrange(startTimeUTC, game_id) %>%
-  mutate(game_index = row_number())
-
-# Create rolling origin resamples at the game level
-game_splits <- rolling_origin(
-  data = game_level_df,
-  initial = 3611,   # Approx. _ season
-  assess = 250,      # Approx. _ games in the test set
-  cumulative = FALSE,
-  skip = 250       # No overlap between test sets
-)
-
-# Translate splits to player level
-translate_splits <- function(spl) {
-  train_games <- analysis(spl)$game_id
-  test_games <- assessment(spl)$game_id
-  
-  # Ensure same-date games are handled correctly
-  train_dates <- game_level_df %>%
-    filter(game_id %in% train_games) %>%
-    pull(startTimeUTC)
-  
-  test_dates <- game_level_df %>%
-    filter(game_id %in% test_games) %>%
-    pull(startTimeUTC)
-  
-  #find player rows that match those training or test dates
-  train_indices <- which(team_df_played$startTimeUTC %in% train_dates)
-  test_indices <- which(team_df_played$startTimeUTC %in% test_dates)
-  
-  rsample::make_splits(
-    list(analysis = train_indices, assessment = test_indices),
-    data = team_df_played
-  )
-}
-
-# Set up parallel backend
-num_cores <- detectCores()
-cl <- makeCluster(max(0,num_cores-4))
-registerDoParallel(cl)
-
-# Step 1: Translate all game-level splits into player-level splits
-team_splits_list <- map(game_splits$splits, translate_splits)
-
-# Step 4: Create the rset object for the remaining splits
-team_splits <- rsample::manual_rset(
-  splits = team_splits_list,
-  ids = game_splits$id
-)
-final_split <- team_splits$splits[[dim(team_splits)[1]]]
-team_splits <- team_splits[-dim(team_splits)[1],]
-
-saveRDS(final_split, file = paste0(rds_files_path, "/Data/team_final_split_250_v2.rds"))
-saveRDS(team_splits, file = paste0(rds_files_path, "/Data/team_splits_250_v2.rds"))
-rm(final_split)
-
-# Ensure team_splits is a valid rset object
-class(team_splits) <- c("manual_rset", "rset", "tbl_df", "tbl", "data.frame")
-rm(team_splits_list)
-
-for (s in 1:dim(team_splits)[1]) {
-  #Check logic working
-  first_split <- team_splits$splits[[s]]
-  train_indices <- analysis(first_split)
-  test_indices <- assessment(first_split)
-  
-  print(paste0("NA's in ",s,"train split: ",sum(colSums(is.na(train_indices)))))
-  print(paste0("NA's in ",s,"test split: ",sum(colSums(is.na(test_indices)))))
-  
-}
-
-rm(train_indices)
-rm(test_indices)
-rm(first_split)
+# ### ----ROLLING CV (250 GAME SPLIT)-----
+# # Create a game-level data frame
+# game_level_df <- team_df_played %>%
+#   distinct(game_id, game_date, startTimeUTC) %>%
+#   arrange(startTimeUTC, game_id) %>%
+#   mutate(game_index = row_number())
+# 
+# # Create rolling origin resamples at the game level
+# game_splits <- rolling_origin(
+#   data = game_level_df,
+#   initial = 3611,   # Approx. _ season
+#   assess = 250,      # Approx. _ games in the test set
+#   cumulative = FALSE,
+#   skip = 250       # No overlap between test sets
+# )
+# 
+# # Translate splits to player level
+# translate_splits <- function(spl) {
+#   train_games <- analysis(spl)$game_id
+#   test_games <- assessment(spl)$game_id
+#   
+#   # Ensure same-date games are handled correctly
+#   train_dates <- game_level_df %>%
+#     filter(game_id %in% train_games) %>%
+#     pull(startTimeUTC)
+#   
+#   test_dates <- game_level_df %>%
+#     filter(game_id %in% test_games) %>%
+#     pull(startTimeUTC)
+#   
+#   #find player rows that match those training or test dates
+#   train_indices <- which(team_df_played$startTimeUTC %in% train_dates)
+#   test_indices <- which(team_df_played$startTimeUTC %in% test_dates)
+#   
+#   rsample::make_splits(
+#     list(analysis = train_indices, assessment = test_indices),
+#     data = team_df_played
+#   )
+# }
+# 
+# # Set up parallel backend
+# num_cores <- detectCores()
+# cl <- makeCluster(max(0,num_cores-4))
+# registerDoParallel(cl)
+# 
+# # Step 1: Translate all game-level splits into player-level splits
+# team_splits_list <- map(game_splits$splits, translate_splits)
+# 
+# # Step 4: Create the rset object for the remaining splits
+# team_splits <- rsample::manual_rset(
+#   splits = team_splits_list,
+#   ids = game_splits$id
+# )
+# final_split <- team_splits$splits[[dim(team_splits)[1]]]
+# team_splits <- team_splits[-dim(team_splits)[1],]
+# 
+# saveRDS(final_split, file = paste0(rds_files_path, "/Data/team_final_split_250_v2.rds"))
+# saveRDS(team_splits, file = paste0(rds_files_path, "/Data/team_splits_250_v2.rds"))
+# rm(final_split)
+# 
+# # Ensure team_splits is a valid rset object
+# class(team_splits) <- c("manual_rset", "rset", "tbl_df", "tbl", "data.frame")
+# rm(team_splits_list)
+# 
+# for (s in 1:dim(team_splits)[1]) {
+#   #Check logic working
+#   first_split <- team_splits$splits[[s]]
+#   train_indices <- analysis(first_split)
+#   test_indices <- assessment(first_split)
+#   
+#   print(paste0("NA's in ",s,"train split: ",sum(colSums(is.na(train_indices)))))
+#   print(paste0("NA's in ",s,"test split: ",sum(colSums(is.na(test_indices)))))
+#   
+# }
+# 
+# rm(train_indices)
+# rm(test_indices)
+# rm(first_split)
 
 set.seed(123)
 # ---------------------------
@@ -213,7 +217,7 @@ build_custom_mlp <- function(hidden_units, penalty) {
 early_stop <- callback_early_stopping(
   monitor = "val_loss",
   # monitor = "loss", # Metric to monitor (val_loss not available)
-  patience = 10, # Number of epochs with no improvement
+  patience = 7, # Number of epochs with no improvement
   restore_best_weights = TRUE # Restore model weights from the epoch with the best value of the monitored metric
 )
 
@@ -242,6 +246,27 @@ team_mlp <- mlp(
 # ---------------------------
 # Create Workflow
 # ---------------------------
+# team_recipe2 <- recipe(game_won ~ ., data = team_df_played) %>%
+#   step_rm(game_status) %>%
+#   # step_rm(team_game_spread) %>%
+#   step_rm(game_won_spread) %>%
+#   step_rm(playerId) %>%
+#   step_rm(all_of(c("venueUTCOffset","venueLocation","away_team_name", 
+#                    "away_team_locale","home_team_name", "home_team_locale", 
+#                    "winning_team","winning_team_id"))) %>% #variable performance test recipe
+#   step_rm(matches("7|15")) %>%
+#   # Assign specific roles to ID columns
+#   update_role(game_id, home_id, away_id, teamId, opp_teamId,
+#               new_role = "ID") %>%
+#   update_role(game_date, new_role = "DATE") %>%
+#   update_role(startTimeUTC, new_role = "DATETIME") %>%
+#   step_mutate(is_home = as.factor(is_home)) %>%
+#   step_mutate(season = as.factor(season)) %>%
+#   step_zv() %>%
+#   step_normalize(all_numeric_predictors()) %>%
+#   step_novel(all_nominal_predictors(), -is_home) %>%
+#   step_dummy(all_nominal_predictors()) 
+
 team_wf_mlp <- workflow() %>%
   add_recipe(team_recipe) %>%
   add_model(team_mlp)
@@ -273,7 +298,7 @@ mlp_param <- parameters(team_mlp) %>%
   update(
     hidden_units = hidden_units(range = c(round(sqrt(hu_s - 1)), (hu_s - 1) * 2)),
     # penalty = penalty(range = c(-10, 0), trans = log10_trans()),
-    penalty = penalty(range = c(-6, -2), trans = log10_trans()),
+    penalty = penalty(range = c(-6, -1), trans = log10_trans()),
     epochs = epochs(range = c(35, 250))
   )
 mlp_param %>% extract_parameter_dials("hidden_units")
@@ -283,14 +308,14 @@ mlp_param %>% extract_parameter_dials("epochs")
 # # ---------------------------
 # # Define Grid Control
 # # ---------------------------
+#If after 10 consecutive iterations there's no improvement, optimization stops earl
 control_settings <- control_bayes(
   save_pred = TRUE,
   verbose = TRUE,
-  no_improve = 10          # more tolerant to small improvements
+  no_improve = 3          # more tolerant to small improvements
 )
 
-#If after 10 consecutive iterations there's no improvement, optimization stops earl
-# 
+
 # # ---------------------------
 # # Fit Resamples
 # # ---------------------------
@@ -309,12 +334,12 @@ mlp_res_rolling  <- tune_bayes(
   resamples = team_splits,
   param_info = mlp_param,
   metrics = metric_set(roc_auc, accuracy, kap, brier_class, yardstick::spec, yardstick::sens),
-  initial = 10,   # starts with 10 random points
-  iter = 30,      # 30 additional Bayesian iterations
+  initial = 4,   # starts with 10 random points
+  iter = 4,      # 20 additional Bayesian iterations
   control = control_settings
 )
-rm(team_splits)
 stopCluster(cl)
+rm(team_splits)
 gc()
 
 # ###DELETE
@@ -361,9 +386,12 @@ gc()
 best_penalty <- best_mlp_rolling %>% pull(penalty)
 best_hidden_units <- best_mlp_rolling %>% pull(hidden_units)
 best_epochs<- best_mlp_rolling %>% pull(epochs)
-
 team_metrics_best <- team_metrics %>% 
   filter(hidden_units == best_hidden_units, penalty == best_penalty, epochs == best_epochs)
+team_metrics_avg <- team_metrics_best %>%
+  group_by(.metric) %>%
+  summarize(mean_est = mean(.estimate, na.rm = TRUE), .groups = "drop")
+team_metrics_avg 
 
 # Plot the per-split performance for the best model
 ggplot(team_metrics_best, aes(x = id, y = .estimate, color = .metric, group = .metric)) +
@@ -380,7 +408,7 @@ ggplot(team_metrics_best, aes(x = id, y = .estimate, color = .metric, group = .m
 # ---------------------------
 # Finalize the Workflow
 # ---------------------------
-final_split <- readRDS(paste0(rds_files_path, "/Data/team_final_split_250_v2.rds"))
+final_split <- readRDS(paste0(rds_files_path, "/Data/team_final_split_v3.rds"))
 final_mlp_wf <- finalize_workflow(team_wf_mlp, best_mlp_rolling)
 final_mlp_wf$fit$actions$model$spec
 rm(best_mlp_rolling,team_wf_mlp)

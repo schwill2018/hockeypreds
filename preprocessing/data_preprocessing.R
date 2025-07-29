@@ -96,6 +96,7 @@ for (rds_file in rds_files) {
       # Add game metadata
       plays_df$game_id         <- season_data[[i]]$game_id
       plays_df$game_date       <- season_data[[i]]$play_by_play$gameDate
+      plays_df$last_period_type <- season_data[[i]]$play_by_play$gameOutcome$lastPeriodType
       plays_df$otInUse         <- season_data[[i]]$play_by_play$otInUse
       plays_df$shootoutInUse   <- season_data[[i]]$play_by_play$shootoutInUse
       plays_df$venueLocation   <- season_data[[i]]$play_by_play$venueLocation$default
@@ -179,6 +180,7 @@ for (rds_file in rds_files) {
       # Add game metadata
       boxscore_df$game_id        <- season_data[[i]]$game_id
       boxscore_df$game_date      <- season_data[[i]]$boxscore$gameDate
+      boxscore_df$last_period_type <- season_data[[i]]$boxscore$gameOutcome$lastPeriodType
       boxscore_df$otInUse        <- season_data[[i]]$play_by_play$otInUse
       boxscore_df$shootoutInUse  <- season_data[[i]]$play_by_play$shootoutInUse
       boxscore_df$venueLocation  <- season_data[[i]]$boxscore$venueLocation$default
@@ -630,13 +632,13 @@ unplayed_games_expanded <- unplayed_games_expanded %>%
 combined_games <- bind_rows(played_games, unplayed_games_expanded) %>%
   arrange(season, teamId, game_date)
 
-all_boxscore_df <- combined_games
+#If no unplayed games (post season)
+all_boxscore_df <- played_games #combined_games
 rm(combined_games, played_games, unplayed_games, unplayed_games_home, 
    unplayed_games_away, unplayed_games_expanded, recent_player_stats, recent_season)
 
 # ----- STEP 3: Compute Lagged and Rolling Metrics on the Joined Data -----
 X <- 5  # Define the window size for lag/rolling calculations
-
 # Order by player and game date so that lag() works correctly
 all_boxscore_df <- all_boxscore_df %>%
   arrange(playerId, season, game_date) %>%
@@ -688,7 +690,6 @@ all_boxscore_df <- all_boxscore_df %>%
     })
   ) %>%
   ungroup()
-
 
 ## ----Time Since Last Game-----------------------------------------------------------------------------------------------------------------------------------------------
 ### Calculate Time Since Last Game for each team and each player
@@ -778,8 +779,8 @@ cl <- makeCluster(num_cores)
 registerDoParallel(cl)
 rds_files_path <- getwd()
 # Load the data files
-# all_shift_df <- readRDS("/users/willschneider/Hockey Project/Data/combined_2009_2024_shifts_v2.rds")
-# all_plays_df <- readRDS("/users/willschneider/Hockey Project/Data/combined_2009_2024_plays_v2.rds")
+# all_shift_df <- readRDS(paste0(rds_files_path,"/Data/combined_2009_2024_shifts_v2.rds"))
+# all_plays_df <- readRDS(paste0(rds_files_path,"/Data/combined_2009_2024_plays_v2.rds"))
 all_boxscore_df <- readRDS(paste0(rds_files_path,"/Data/combined_2009_2024_boxscore_v2.rds"))
 
 stopCluster(cl)
@@ -1699,7 +1700,6 @@ if (file.exists(tz_file)) {
   
   with_progress({
     p <- progressor(steps = total_steps)
-    
     time_zone_df <- new_tz_keys %>%
       mutate(
         home_time_zone = tz_lookup_coords(home_lat, home_long, method = "accurate"),
@@ -1820,284 +1820,284 @@ saveRDS(all_boxscore_df, file = paste0(rds_files_path, "/Data/combined_2009_2024
 
 
 ## ----HURST EXPONENT-----------------------------------------------------------------------------------------------------------------------------------------------
-# library(dplyr)
-# library(zoo)
-# library(pracma)
-# library(foreach)
-# library(doParallel)
-# library(lubridate) # For handling date intervals
-# 
-# # Load data
-# rds_files_path <- getwd()
-# all_boxscore_df <- readRDS(paste0(rds_files_path, "/Data/combined_2009_2024_boxscore_v2.rds"))
-# 
-# # Split data by playerId and season for independent parallel processing
-# split_data_list <- all_boxscore_df %>%
-#   group_split(playerId, season)
-# 
-# # Set up cluster
-# num_cores <- detectCores()-2
+library(dplyr)
+library(zoo)
+library(pracma)
+library(foreach)
+library(doParallel)
+library(lubridate) # For handling date intervals
+
+# Load data
+rds_files_path <- getwd()
+all_boxscore_df <- readRDS(paste0(rds_files_path, "/Data/combined_2009_2024_boxscore_v2.rds"))
+
+# Split data by playerId and season for independent parallel processing
+split_data_list <- all_boxscore_df %>%
+  group_split(playerId, season)
+
+# Set up cluster
+num_cores <- detectCores()-2
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+# Define the Hurst calculation function using He only
+hurst_calculation <- function(series) {
+  # Remove NA values
+  series <- na.omit(series)
+
+  # Check if the series is long enough
+  if (length(series) < 10) {
+    return(NA)
+  }
+
+  # Check for constant series
+  if (length(unique(series)) <= 1) {
+    return(NA)
+  }
+
+  # # Difference the series to make it stationary
+  # diff_series <- diff(series)
+  #
+  # # After differencing, check again
+  # if (length(unique(diff_series)) <= 1) {
+  #   return(NA)
+  # }
+
+  # Calculate Hurst exponent using 'He' only
+  hurst_values <- tryCatch(
+    hurstexp(series, display = FALSE),
+    error = function(e) return(NA)
+  )
+
+  # Return 'He' if available
+  if (!is.na(hurst_values$Hal)) {
+    return(hurst_values$Hal)
+  } else {
+    return(NA)
+  }
+}
+
+# Define the Adjusted Bridge Range function
+adjusted_bridge_range <- function(series, scale) {
+  # Apply rollapply with the specified scale
+  rollapply(series, width = scale, function(x) {
+    # Remove NA values
+    x <- na.omit(x)
+
+    # Ensure sufficient data points
+    if (length(x) < scale) return(NA)
+
+    # Compute base range
+    base_range <- max(x, na.rm = TRUE) - min(x, na.rm = TRUE)
+
+    # Calculate Hurst exponent on the window
+    h_val <- hurst_calculation(x)
+    if (is.na(h_val)) return(NA)
+
+    # Compute run-length encoding of trend directions
+    trend_run <- rle(sign(diff(x)))$lengths
+    max_run_length <- ifelse(length(trend_run) > 0, max(trend_run, na.rm = TRUE), NA)
+
+    # Apply bridge range adjustment based on run length
+    if (!is.na(max_run_length) && max_run_length > 2) {
+      return(base_range ^ h_val)
+    } else {
+      return(base_range)
+    }
+  }, align = "right", fill = NA, partial = FALSE)
+}
+
+# Define a function that applies calculations to one subset
+process_subset <- function(subset_df, scales) {
+  # Arrange and group data
+  subset_df <- subset_df %>%
+    arrange(playerId, game_date) %>%
+    group_by(playerId, season) %>%
+    # Create add_subtract metric: +1 if points > 0, -1 otherwise
+    mutate(
+      add_subtract_points = ifelse(points > 0, 1, -1),
+      # Lag the metrics to prevent data leakage
+      points_lag = lag(points, 1, default = 0),
+      add_subtract_points_lag = lag(add_subtract_points, 1, default = 0)
+    ) %>%
+    ungroup()
+
+  # Define the metrics to be used for Hurst calculation
+  metrics <- list(
+    list(name = "points", column = "points_lag"),
+    list(name = "add_subtract", column = "add_subtract_points_lag")
+  )
+
+  # Iterate over each scale and metric to compute Hurst and Adjusted Bridge Range
+  # Implement fallback logic
+  for (metric in metrics) {
+    for (scale in scales) {
+      hurst_col <- paste0("rolling_hurst_", metric$name, "_", scale)
+      adj_bridge_col <- paste0("rolling_adjusted_bridge_range_", metric$name, "_", scale)
+
+      # Initialize new columns as NA
+      subset_df[[hurst_col]] <- NA
+      subset_df[[adj_bridge_col]] <- NA
+
+      subset_df <- subset_df %>%
+        arrange(playerId, game_date) %>%
+        group_by(playerId, season) %>%
+        mutate(
+          !!hurst_col := rollapply(
+            .data[[metric$column]],
+            width = scale,
+            FUN = hurst_calculation,
+            align = "right",
+            fill = NA,
+            partial = FALSE
+          ),
+          !!adj_bridge_col := adjusted_bridge_range(.data[[metric$column]], scale)
+          ) %>%
+        ungroup()
+
+      if (scale == 25) {
+        subset_df <- subset_df %>%
+          arrange(playerId, game_date) %>%
+          group_by(playerId, season) %>%
+          mutate(
+            !!hurst_col := ifelse(
+              is.na(.data[[hurst_col]]),
+              ifelse(
+                !is.na(.data[[paste0("rolling_hurst_", metric$name, "_", 15)]]),
+                .data[[paste0("rolling_hurst_", metric$name, "_", 15)]],
+                ifelse(
+                  !is.na(.data[[paste0("rolling_hurst_", metric$name, "_", 10)]]),
+                  .data[[paste0("rolling_hurst_", metric$name, "_", 10)]],
+                  0
+                )
+              ),
+              .data[[hurst_col]]
+            ),
+            !!adj_bridge_col := ifelse(
+              is.na(.data[[adj_bridge_col]]),
+              ifelse(
+                !is.na(.data[[paste0("rolling_adjusted_bridge_range_", metric$name, "_", 15)]]),
+                .data[[paste0("rolling_adjusted_bridge_range_", metric$name, "_", 15)]],
+                ifelse(
+                  !is.na(.data[[paste0("rolling_adjusted_bridge_range_", metric$name, "_", 10)]]),
+                  .data[[paste0("rolling_adjusted_bridge_range_", metric$name, "_", 10)]],
+                  0
+                )
+              ),
+              .data[[adj_bridge_col]]
+            )
+          ) %>%
+          ungroup()
+
+        # Log if fallback occurred
+        fallback_occurred <- subset_df %>%
+          filter(is.na(.data[[paste0("rolling_hurst_", metric$name, "_", scale)]])) %>%
+          pull(playerId)
+
+        if (length(fallback_occurred) > 0) {
+          message(paste("Fallback applied for playerId(s):", paste(fallback_occurred, collapse = ", "), "on scale:", scale))
+        }
+      }
+
+      if (scale == 15) {
+        subset_df <- subset_df %>%
+          arrange(playerId, game_date) %>%
+          group_by(playerId, season) %>%
+          mutate(
+            !!hurst_col := ifelse(
+              is.na(.data[[hurst_col]]),
+              ifelse(
+                !is.na(.data[[paste0("rolling_hurst_", metric$name, "_", 10)]]),
+                .data[[paste0("rolling_hurst_", metric$name, "_", 10)]],
+                0
+              ),
+              .data[[hurst_col]]
+            ),
+            !!adj_bridge_col := ifelse(
+              is.na(.data[[adj_bridge_col]]),
+              ifelse(
+                !is.na(.data[[paste0("rolling_adjusted_bridge_range_", metric$name, "_", 10)]]),
+                .data[[paste0("rolling_adjusted_bridge_range_", metric$name, "_", 10)]],
+                0
+              ),
+              .data[[adj_bridge_col]]
+            )
+          ) %>%
+          ungroup()
+
+        # Log if fallback occurred
+        fallback_occurred <- subset_df %>%
+          filter(is.na(.data[[paste0("rolling_hurst_", metric$name, "_", scale)]])) %>%
+          pull(playerId)
+
+        if (length(fallback_occurred) > 0) {
+          message(paste("Fallback applied for playerId(s):", paste(fallback_occurred, collapse = ", "), "on scale:", scale))
+        }
+      }
+
+      if (scale == 10) {
+        subset_df <- subset_df %>%
+          arrange(playerId, game_date) %>%
+          group_by(playerId, season) %>%
+          mutate(
+            !!hurst_col := ifelse(is.na(.data[[hurst_col]]), 0, .data[[hurst_col]]),
+            !!adj_bridge_col := ifelse(is.na(.data[[adj_bridge_col]]), 0, .data[[adj_bridge_col]])
+          ) %>%
+          ungroup()
+
+        # Log if fallback occurred
+        fallback_occurred <- subset_df %>%
+          filter(is.na(.data[[paste0("rolling_hurst_", metric$name, "_", scale)]])) %>%
+          pull(playerId)
+
+        if (length(fallback_occurred) > 0) {
+          message(paste("Fallback applied for playerId(s):", paste(fallback_occurred, collapse = ", "), "on scale:", scale))
+        }
+      }
+    }
+  }
+
+  return(subset_df)
+}
+
+# Define scales
+scales <- c(10, 15, 25)
+
+# Start parallel processing
+start_time <- Sys.time()
+results_list <- foreach(df_chunk = split_data_list,
+                        .packages = c("dplyr", "zoo", "pracma", "lubridate")) %dopar% {
+  process_subset(df_chunk, scales)
+}
+stopCluster(cl)
+end_time <- Sys.time()
+
+# results <- all_boxscore_df %>% filter(name.default == "A. Ovechkin")
+# num_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", unset=4))-1
 # cl <- makeCluster(num_cores)
 # registerDoParallel(cl)
-# 
-# # Define the Hurst calculation function using He only
-# hurst_calculation <- function(series) {
-#   # Remove NA values
-#   series <- na.omit(series)
-# 
-#   # Check if the series is long enough
-#   if (length(series) < 10) {
-#     return(NA)
-#   }
-# 
-#   # Check for constant series
-#   if (length(unique(series)) <= 1) {
-#     return(NA)
-#   }
-# 
-#   # # Difference the series to make it stationary
-#   # diff_series <- diff(series)
-#   #
-#   # # After differencing, check again
-#   # if (length(unique(diff_series)) <= 1) {
-#   #   return(NA)
-#   # }
-# 
-#   # Calculate Hurst exponent using 'He' only
-#   hurst_values <- tryCatch(
-#     hurstexp(series, display = FALSE),
-#     error = function(e) return(NA)
-#   )
-# 
-#   # Return 'He' if available
-#   if (!is.na(hurst_values$Hal)) {
-#     return(hurst_values$Hal)
-#   } else {
-#     return(NA)
-#   }
-# }
-# 
-# # Define the Adjusted Bridge Range function
-# adjusted_bridge_range <- function(series, scale) {
-#   # Apply rollapply with the specified scale
-#   rollapply(series, width = scale, function(x) {
-#     # Remove NA values
-#     x <- na.omit(x)
-# 
-#     # Ensure sufficient data points
-#     if (length(x) < scale) return(NA)
-# 
-#     # Compute base range
-#     base_range <- max(x, na.rm = TRUE) - min(x, na.rm = TRUE)
-# 
-#     # Calculate Hurst exponent on the window
-#     h_val <- hurst_calculation(x)
-#     if (is.na(h_val)) return(NA)
-# 
-#     # Compute run-length encoding of trend directions
-#     trend_run <- rle(sign(diff(x)))$lengths
-#     max_run_length <- ifelse(length(trend_run) > 0, max(trend_run, na.rm = TRUE), NA)
-# 
-#     # Apply bridge range adjustment based on run length
-#     if (!is.na(max_run_length) && max_run_length > 2) {
-#       return(base_range ^ h_val)
-#     } else {
-#       return(base_range)
-#     }
-#   }, align = "right", fill = NA, partial = FALSE)
-# }
-# 
-# # Define a function that applies calculations to one subset
-# process_subset <- function(subset_df, scales) {
-#   # Arrange and group data
-#   subset_df <- subset_df %>%
-#     arrange(playerId, game_date) %>%
-#     group_by(playerId, season) %>%
-#     # Create add_subtract metric: +1 if points > 0, -1 otherwise
-#     mutate(
-#       add_subtract_points = ifelse(points > 0, 1, -1),
-#       # Lag the metrics to prevent data leakage
-#       points_lag = lag(points, 1, default = 0),
-#       add_subtract_points_lag = lag(add_subtract_points, 1, default = 0)
-#     ) %>%
-#     ungroup()
-# 
-#   # Define the metrics to be used for Hurst calculation
-#   metrics <- list(
-#     list(name = "points", column = "points_lag"),
-#     list(name = "add_subtract", column = "add_subtract_points_lag")
-#   )
-# 
-#   # Iterate over each scale and metric to compute Hurst and Adjusted Bridge Range
-#   # Implement fallback logic
-#   for (metric in metrics) {
-#     for (scale in scales) {
-#       hurst_col <- paste0("rolling_hurst_", metric$name, "_", scale)
-#       adj_bridge_col <- paste0("rolling_adjusted_bridge_range_", metric$name, "_", scale)
-# 
-#       # Initialize new columns as NA
-#       subset_df[[hurst_col]] <- NA
-#       subset_df[[adj_bridge_col]] <- NA
-# 
-#       subset_df <- subset_df %>%
-#         arrange(playerId, game_date) %>%
-#         group_by(playerId, season) %>%
-#         mutate(
-#           !!hurst_col := rollapply(
-#             .data[[metric$column]],
-#             width = scale,
-#             FUN = hurst_calculation,
-#             align = "right",
-#             fill = NA,
-#             partial = FALSE
-#           ),
-#           !!adj_bridge_col := adjusted_bridge_range(.data[[metric$column]], scale)
-#           ) %>%
-#         ungroup()
-# 
-#       if (scale == 25) {
-#         subset_df <- subset_df %>%
-#           arrange(playerId, game_date) %>%
-#           group_by(playerId, season) %>%
-#           mutate(
-#             !!hurst_col := ifelse(
-#               is.na(.data[[hurst_col]]),
-#               ifelse(
-#                 !is.na(.data[[paste0("rolling_hurst_", metric$name, "_", 15)]]),
-#                 .data[[paste0("rolling_hurst_", metric$name, "_", 15)]],
-#                 ifelse(
-#                   !is.na(.data[[paste0("rolling_hurst_", metric$name, "_", 10)]]),
-#                   .data[[paste0("rolling_hurst_", metric$name, "_", 10)]],
-#                   0
-#                 )
-#               ),
-#               .data[[hurst_col]]
-#             ),
-#             !!adj_bridge_col := ifelse(
-#               is.na(.data[[adj_bridge_col]]),
-#               ifelse(
-#                 !is.na(.data[[paste0("rolling_adjusted_bridge_range_", metric$name, "_", 15)]]),
-#                 .data[[paste0("rolling_adjusted_bridge_range_", metric$name, "_", 15)]],
-#                 ifelse(
-#                   !is.na(.data[[paste0("rolling_adjusted_bridge_range_", metric$name, "_", 10)]]),
-#                   .data[[paste0("rolling_adjusted_bridge_range_", metric$name, "_", 10)]],
-#                   0
-#                 )
-#               ),
-#               .data[[adj_bridge_col]]
-#             )
-#           ) %>%
-#           ungroup()
-# 
-#         # Log if fallback occurred
-#         fallback_occurred <- subset_df %>%
-#           filter(is.na(.data[[paste0("rolling_hurst_", metric$name, "_", scale)]])) %>%
-#           pull(playerId)
-# 
-#         if (length(fallback_occurred) > 0) {
-#           message(paste("Fallback applied for playerId(s):", paste(fallback_occurred, collapse = ", "), "on scale:", scale))
-#         }
-#       }
-# 
-#       if (scale == 15) {
-#         subset_df <- subset_df %>%
-#           arrange(playerId, game_date) %>%
-#           group_by(playerId, season) %>%
-#           mutate(
-#             !!hurst_col := ifelse(
-#               is.na(.data[[hurst_col]]),
-#               ifelse(
-#                 !is.na(.data[[paste0("rolling_hurst_", metric$name, "_", 10)]]),
-#                 .data[[paste0("rolling_hurst_", metric$name, "_", 10)]],
-#                 0
-#               ),
-#               .data[[hurst_col]]
-#             ),
-#             !!adj_bridge_col := ifelse(
-#               is.na(.data[[adj_bridge_col]]),
-#               ifelse(
-#                 !is.na(.data[[paste0("rolling_adjusted_bridge_range_", metric$name, "_", 10)]]),
-#                 .data[[paste0("rolling_adjusted_bridge_range_", metric$name, "_", 10)]],
-#                 0
-#               ),
-#               .data[[adj_bridge_col]]
-#             )
-#           ) %>%
-#           ungroup()
-# 
-#         # Log if fallback occurred
-#         fallback_occurred <- subset_df %>%
-#           filter(is.na(.data[[paste0("rolling_hurst_", metric$name, "_", scale)]])) %>%
-#           pull(playerId)
-# 
-#         if (length(fallback_occurred) > 0) {
-#           message(paste("Fallback applied for playerId(s):", paste(fallback_occurred, collapse = ", "), "on scale:", scale))
-#         }
-#       }
-# 
-#       if (scale == 10) {
-#         subset_df <- subset_df %>%
-#           arrange(playerId, game_date) %>%
-#           group_by(playerId, season) %>%
-#           mutate(
-#             !!hurst_col := ifelse(is.na(.data[[hurst_col]]), 0, .data[[hurst_col]]),
-#             !!adj_bridge_col := ifelse(is.na(.data[[adj_bridge_col]]), 0, .data[[adj_bridge_col]])
-#           ) %>%
-#           ungroup()
-# 
-#         # Log if fallback occurred
-#         fallback_occurred <- subset_df %>%
-#           filter(is.na(.data[[paste0("rolling_hurst_", metric$name, "_", scale)]])) %>%
-#           pull(playerId)
-# 
-#         if (length(fallback_occurred) > 0) {
-#           message(paste("Fallback applied for playerId(s):", paste(fallback_occurred, collapse = ", "), "on scale:", scale))
-#         }
-#       }
-#     }
-#   }
-# 
-#   return(subset_df)
-# }
-# 
-# # Define scales
-# scales <- c(10, 15, 25)
-# 
-# # Start parallel processing
-# start_time <- Sys.time()
-# results_list <- foreach(df_chunk = split_data_list,
-#                         .packages = c("dplyr", "zoo", "pracma", "lubridate")) %dopar% {
-#   process_subset(df_chunk, scales)
-# }
+# hurst_df_test <- process_subset(results,scales)
 # stopCluster(cl)
-# end_time <- Sys.time()
-# 
-# # results <- all_boxscore_df %>% filter(name.default == "A. Ovechkin")
-# # num_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", unset=4))-1
-# # cl <- makeCluster(num_cores)
-# # registerDoParallel(cl)
-# # hurst_df_test <- process_subset(results,scales)
-# # stopCluster(cl)
-# # saveRDS(all_boxscore_df_test, file = paste0(rds_files_path, "/combined_2009_2024_boxscore_v2.rds"))
-# 
-# # Combine results into a single data frame
-# all_boxscore_df_test <- bind_rows(results_list)
-# hurst_time <- end_time - start_time
-# hurst_time
-# # Handle NA Hurst values by carrying forward the last known Hurst value within each group
-# all_boxscore_df_test <- all_boxscore_df_test %>%
-#   group_by(playerId, season) %>%
-#   mutate(across(starts_with("rolling_hurst_"), ~ zoo::na.locf(.x, na.rm = FALSE))) %>%
-#   ungroup()
-# 
-# all_boxscore_df <- all_boxscore_df_test
-# # Save the updated data frame
-# saveRDS(all_boxscore_df, file = paste0(rds_files_path, "/Data/combined_2009_2024_boxscore_v2.rds"))
-# 
-# # Save execution time to a file
-# write(paste("Execution Time:", hurst_time), paste0(rds_files_path,"/execution_time_hurst.txt"))
-# rm(all_boxscore_df_test,results_list, split_data_list)
-# gc()
+# saveRDS(all_boxscore_df_test, file = paste0(rds_files_path, "/combined_2009_2024_boxscore_v2.rds"))
+
+# Combine results into a single data frame
+all_boxscore_df_test <- bind_rows(results_list)
+hurst_time <- end_time - start_time
+hurst_time
+# Handle NA Hurst values by carrying forward the last known Hurst value within each group
+all_boxscore_df_test <- all_boxscore_df_test %>%
+  group_by(playerId, season) %>%
+  mutate(across(starts_with("rolling_hurst_"), ~ zoo::na.locf(.x, na.rm = FALSE))) %>%
+  ungroup()
+
+all_boxscore_df <- all_boxscore_df_test
+# Save the updated data frame
+saveRDS(all_boxscore_df, file = paste0(rds_files_path, "/Data/combined_2009_2024_boxscore_v2.rds"))
+
+# Save execution time to a file
+write(paste("Execution Time:", hurst_time), paste0(rds_files_path,"/execution_time_hurst.txt"))
+rm(all_boxscore_df_test,results_list, split_data_list)
+gc()
 
 ## ----Final NA Check-----------------------------------------------------------------------------------------------------------------------------------------------
 library(naniar)
@@ -2223,9 +2223,6 @@ all_boxscore_df <- all_boxscore_df  %>%
     player_hrs_since_last_game = coalesce(player_hrs_since_last_game, 0)
   )
 
-
-###################################################################
-
 gg_miss_var(all_boxscore_df)$data
 tryCatch({
   gg_miss_upset(all_boxscore_df)
@@ -2237,7 +2234,7 @@ tryCatch({
 all_boxscore_df <- all_boxscore_df %>%
   mutate(is_home = if_else(teamId == home_id, 1, 0))
 
-##### ONLY USE THIS CODE IF PREPROCESSING DURING A LIVE GAME ######
+##### ONLY USE THIS CODE IF PREPROCESSING DURING A LIVE GAME
 all_boxscore_df <- all_boxscore_df %>%
   arrange(playerId, game_date) %>%  # sort by player and game date
   group_by(playerId) %>%
@@ -2264,7 +2261,7 @@ all_boxscore_df <- all_boxscore_df %>%
 
 saveRDS(all_boxscore_df, file = paste0(rds_files_path, "/Data/combined_2009_2024_boxscore_v2.rds"))
 
-#--- FINAL PREPROCESSING AND BASIC RECIPE  -----
+##--- FINAL PREPROCESSING AND BASIC RECIPE  -----
 library(tidymodels)
 library(zoo)
 library(tidyverse)
@@ -2292,7 +2289,7 @@ player_df <- player_df %>%
          earned_goal = factor(earned_goal, levels = c("1", "0")),
          earned_assist = factor(earned_assist, levels = c("1", "0"))) %>%
   filter(!(main_position == "goalie")) %>%
-  filter(season >= "2019")
+  filter(season >= "2012")
 
 team_df <- player_df %>%
   group_by(game_id, game_date, teamId) %>%
@@ -2515,15 +2512,14 @@ columns_to_remove <- c( "goals", "assists", "points", "plusMinus", "pim",
                         "rolling_hurst_add_subtract_15","rolling_hurst_add_subtract_25",
                         "rolling_adjusted_bridge_range_add_subtract_15", 
                         "rolling_adjusted_bridge_range_add_subtract_25","n_shifts",
-                        "rolling_avg_toi_3d_lag","rolling_avg_toi_5d_lag",
-                        "rolling_avg_toi_10d_lag", "taxing_factor_3d_lag",
+                        "rolling_avg_toi_5d_lag", "rolling_avg_toi_10d_lag", 
                         "taxing_factor_5d_lag", "taxing_factor_10d_lag", 
-                        "team_n_shifts","team_med_shift_toi_per_game",
+                        "team_n_shifts", "team_med_shift_toi_per_game",
                         "team_avg_shift_toi_per_game","team_n_shifts_opp",
                         "team_med_shift_toi_per_game_opp",
-                        "team_avg_shift_toi_per_game_opp","main_position",
-                        "teams_game_spread", "position","teams_win", 
-                        "teams_loss", "team_win","team_loss",
+                        "team_avg_shift_toi_per_game_opp",
+                        "teams_game_spread", "position", "main_position",
+                        "teams_win", "teams_loss", "team_win","team_loss",
                         "team_game_spread_opp", "lagged_avg_shift_toi", 
                         "lagged_n_shift", "lagged_game_toi", 
                         "lagged_avg_n_shift_last_X_games","team_game_spread")
@@ -2532,8 +2528,382 @@ columns_to_remove <- unique(columns_to_remove)
 common_columns <- intersect(columns_to_remove, colnames(team_df))
 rm(all_boxscore_df)
 
-# Ensure team_df is sorted by season and game_date
+#Game Number In Season & Days Since Season Start
+team_df <- team_df %>% group_by(season) %>% 
+  mutate(season_start = min(game_date),
+         days_since_season_start = as.integer(game_date - season_start)) %>%
+  ungroup() %>% group_by(season, teamId) %>% 
+  arrange(game_date, game_id, .by_group = TRUE) %>%
+  mutate(game_number_for_team = row_number()) %>% select(-season_start) %>%
+  ungroup()
+
+#Prior Season Team Rankings
+## 1 ── REG-SEASON-ONLY CALCULATIONS ─────────────────────────────
+
+# 1A) Prior-season rank  (unchanged)
+reg_points <- team_df %>%
+  filter(gameType == 2) %>%                  # regular season only
+  mutate(game_points = case_when(
+    team_win  == 1 ~ 2L,
+    team_loss == 1 & last_period_type != "REG" ~ 1L,
+    TRUE ~ 0L)) %>%
+  group_by(season, teamId) %>%
+  summarise(total_points = sum(game_points), .groups = "drop") %>% ungroup() %>%
+  group_by(season) %>%
+  mutate(season_rank = dense_rank(desc(total_points))) %>%
+  ungroup()
+
+## 1B) Rolling last-82-games rank  (regular season only)
+reg_rolling <- team_df %>%
+  filter(gameType == 2) %>%
+  arrange(game_date, game_id,teamId) %>%
+  mutate(game_points = case_when(
+    team_win  == 1 ~ 2L,
+    team_loss == 1 & last_period_type != "REG" ~ 1L,
+    TRUE ~ 0L)) %>%
+  group_by(teamId) %>%
+  mutate(#game_points_lag = lag(game_points, default = 0),
+         rolling_points  = lag(rollapply(game_points, 82, sum, align = "right",
+                                         partial = FALSE, fill = NA_real_),
+                               default = 0)) %>%
+  ungroup() %>%
+  select(teamId, game_date, game_id, rolling_points) %>%
+  group_by(teamId) %>%
+  mutate(rolling_filled = na.locf(rolling_points, na.rm = FALSE)) %>%
+  ungroup() %>%
+  group_by(game_date) %>%
+  mutate(rolling_rank = dense_rank(desc(rolling_filled))) %>%
+  ungroup() %>% select(-rolling_filled)
+
+## 1. Rolling totals on actual play days
+reg_played <- team_df %>%
+  filter(gameType == 2) %>%
+  arrange(game_date, game_id) %>%
+  mutate(game_points = case_when(
+    team_win  == 1 ~ 2L,
+    team_loss == 1 & last_period_type != "REG" ~ 1L,
+    TRUE ~ 0L)) %>%
+  group_by(teamId) %>%
+  mutate(rolling_points = lag(rollapply(game_points, 82, sum, align = "right",
+                                        partial = FALSE, fill = NA_real_))) %>%         # no default in lag → NA
+  ungroup() %>%
+  select(teamId, season, game_date, rolling_points, game_id)
+
+## 2. Fill idle-day rows, carry points forward
+reg_full <- reg_played %>%
+  complete(teamId, game_date, fill = list(rolling_points = NA_real_)) %>%
+  arrange(teamId, game_date) %>%
+  group_by(teamId) %>%
+  mutate(rolling_points = na.locf(rolling_points, na.rm = FALSE),
+         rolling_points = replace_na(rolling_points, 0)) %>%  # start-of-season
+  ungroup()
+
+## 3. League-wide rank each day
+reg_ranked <- reg_full %>%
+  group_by(game_date) %>%
+  mutate(rolling_rank = dense_rank(desc(rolling_points))) %>%
+  ungroup()
+
+## 4. Return to original row set (optional)
+reg_rolling <- reg_ranked %>% filter(!is.na(game_id)) %>% select(-season)
+
+## 1C) Regular-season, cumulative points before each game
+reg_cum <- team_df %>%
+  filter(gameType == 2) %>%                          # regular season only
+  arrange(teamId, game_date, game_id) %>%
+  mutate(game_points = case_when(
+    team_win  == 1 ~ 2L,
+    team_loss == 1 & last_period_type != "REG" ~ 1L,
+    TRUE ~ 0L)) %>%
+  group_by(season, teamId) %>%
+  mutate(cum_points = lag(cumsum(game_points), # <-- up-to-previous game
+                          default = 0)) %>% ungroup() %>% 
+  group_by(game_date) %>% mutate(cum_rank = dense_rank(desc(cum_points))) %>%   
+  ungroup() %>% select(teamId, game_date, game_id, cum_points, cum_rank)
+
+## 2 ── JOIN TO THE FULL DATA SET (REGULAR + PLAYOFF) ────────────
 team_df <- team_df %>%
+  mutate(prior_season = season - 1) %>%  # for join (a)
+  # (a) prior-season rank 
+  left_join(reg_points %>% select(season, teamId, prior_rank = season_rank),
+            by = c("prior_season" = "season", "teamId")) %>%
+  # (b) rolling 82-game rank
+  left_join(reg_rolling, by = c("teamId", "game_date", "game_id")) %>%
+  # (c) current-season rank
+  left_join(reg_cum, by = c("teamId", "game_date", "game_id")) %>%
+  arrange(teamId, game_date, game_id) %>% 
+  group_by(teamId) %>%
+  fill(rolling_points, rolling_rank, prior_rank, cum_points, cum_rank, 
+       .direction = "down") %>% # <- PLAYOFF FILL
+  mutate(prior_rank = replace_na(prior_rank, 0L)) %>%
+  ungroup() %>%
+  mutate(no_feats_games = if_else(game_number_for_team <= 15, 1L, 0L)) %>%
+  select(-prior_season)
+team_df_po <- team_df %>% filter(gameType == 3) #sanity check
+colSums(is.na(team_df %>% filter(season >= 2016)))
+saveRDS(team_df,file = paste0(rds_files_path, "/Data/team_df.rds"))
+rm(reg_full,reg_cum,reg_played,reg_rolling,reg_ranked)
+gc()
+
+## TEAM ELO RATING ----
+library(dplyr)
+library(purrr)
+library(quickcode)
+library(tidyverse)
+
+rds_files_path <- getwd()
+team_df <- readRDS(paste0(rds_files_path, "/Data/team_df.rds"))
+common_columns <- intersect(columns_to_remove, colnames(team_df))
+
+## ORIGINAL ELO -------
+## 0.  Game‑level table (one row per real game, home side) --------------------
+elo_df <- team_df %>%
+  filter(is_home == 1) %>%
+  select(game_id, game_date, season, home_id, away_id,
+         home_score, away_score, startTimeUTC) %>%
+  arrange(startTimeUTC, game_id)
+
+## 1. Single‑season Elo engine ----------------------------------------------
+elo_season <- function(games, ratings = list(), K, scale = 400, start_rating = 1500) {
+  n <- nrow(games)
+  elo_home_pre <- numeric(n)
+  elo_away_pre <- numeric(n)
+  p_home <- numeric(n)
+
+  for (i in seq_len(n)) {
+    g  <- games[i, ]
+    hid <- as.character(g$home_id)
+    aid <- as.character(g$away_id)
+    Ra <- ratings[[hid]] %or% start_rating
+    Rb <- ratings[[aid]] %or% start_rating
+    elo_home_pre[i] <- Ra
+    elo_away_pre[i] <- Rb
+    p  <- 1 / (1 + 10 ^ (-(Ra - Rb) / scale))
+    p_home[i] <- p
+    y <- as.integer(g$home_score > g$away_score)
+    delta <- K * (y - p)
+    ratings[[hid]] <- Ra + delta
+    ratings[[aid]] <- Rb - delta
+  }
+  games_out <- games %>%
+    mutate(elo_home_pre = elo_home_pre,
+           elo_away_pre = elo_away_pre,
+           p_home = p_home, p_away = 1-p_home)
+  list(games = games_out, ratings = ratings)
+}
+
+
+## 2. Carry‑over helper ------------------------------------------------------
+carry_over <- function(ratings, carry = 0.7) {
+  if (length(ratings) == 0) return(ratings)
+  mu <- mean(unlist(ratings))
+  lapply(ratings, function(r) carry * r + (1 - carry) * mu)
+}
+
+
+## 3. Log‑loss & K tuning (2012‑2014) ---------------------------------------
+logloss <- function(p, y, eps = 1e-12) {
+  p <- pmin(pmax(p, eps), 1 - eps)
+  -(y * log(p) + (1 - y) * log1p(-p))
+}
+
+tune_K <- function(all_games, seasons_tune, K_grid = 4:40) {
+  best <- Inf; K_opt <- NA
+  ratings <- list()
+  for (K in K_grid) {
+    ratings_k <- ratings
+    ll_vec    <- c()
+    for (s in seasons_tune) {
+      g_s   <- all_games %>% filter(season == s) %>% arrange(startTimeUTC)
+      res   <- elo_season(g_s, ratings_k, K)
+      ll_vec <- c(ll_vec, logloss(res$games$p_home,
+                                  res$games$home_score > res$games$away_score))
+      ratings_k <- carry_over(res$ratings)  # 70/30 reset for next season
+    }
+    ll <- mean(ll_vec, na.rm = TRUE)
+    if (ll < best) { best <- ll; K_opt <- K }
+  }
+  K_opt
+}
+K_best <- tune_K(elo_df, 2012:2014)
+
+## 4. Burn‑in 2015 then run 2016‑2016 ---------------------------------------
+ratings <- list()
+all_out <- list()
+
+for (yr in 2015:max(elo_df$season)) {
+  season_games <- elo_df %>% filter(season == yr) %>% arrange(startTimeUTC)
+  res          <- elo_season(season_games, ratings, K_best)
+  all_out[[as.character(yr)]] <- res$games
+  ratings      <- carry_over(res$ratings)   # prepare for next season
+}
+elo_all_games <- bind_rows(all_out)
+ratings_final <- ratings
+
+team_df <- team_df %>%                       # two rows per game
+  left_join(elo_all_games %>%
+              select(game_id, home_id, away_id, elo_home_pre, elo_away_pre,
+                     p_home, p_away),
+            by = c("game_id","home_id", "away_id")) %>%
+  mutate(elo_pre = if_else(is_home == 1, elo_home_pre, elo_away_pre),
+         elo_prob = if_else(is_home == 1, p_home, p_away),
+         elo_class = if_else(elo_prob >= 0.5, 1, 0)) %>%
+  filter(season >= 2015) %>%
+  select(-elo_pre, -p_home, -p_away)
+
+## UPDATED ELO -------
+# ### 0.  Base game‑table (one home row per game) --------------------------------
+# base_games <- team_df %>%
+#   filter(is_home == 1) %>%
+#   select(game_id, game_date, season, home_id, away_id,
+#          home_score, away_score, startTimeUTC,
+#          team_CF, team_CA,
+#          team_powerPlayGoals, team_powerPlayGoals_opp) %>%
+#   arrange(startTimeUTC, game_id) %>%
+#   mutate(
+#     goal_diff = home_score - away_score,
+#     corsi_diff = team_CF - team_CA,
+#     pp_goal_diff = team_powerPlayGoals - team_powerPlayGoals_opp)
+# 
+# ### 1.  Generic Elo engine -----------------------------------------------------
+# elo_run <- function(games, ratings = list(), K, scale = 400, 
+#                     start_rating = 1500, outcome_vec, 
+#                     weight_vec   = rep(1, nrow(games))) {
+#   n <- nrow(games)
+#   elo_home_pre <- numeric(n)
+#   elo_away_pre <- numeric(n)
+#   p_home <- numeric(n)
+#   outcome_num <- as.numeric(outcome_vec)  # 1 / 0 indicator
+#   
+#   for (i in seq_len(n)) {
+#     g <- games[i, ]
+#     hid <- as.character(g$home_id)
+#     aid <- as.character(g$away_id)
+#     Ra <- ratings[[hid]] %or% start_rating
+#     Rb <- ratings[[aid]] %or% start_rating
+#     elo_home_pre[i] <- Ra
+#     elo_away_pre[i] <- Rb
+#     p <- 1 / (1 + 10 ^ (-(Ra - Rb) / scale))
+#     p_home[i] <- p
+#     
+#     delta <-  weight_vec[i] * K * (outcome_num[i] - p)
+#     ratings[[hid]] <- Ra + delta
+#     ratings[[aid]] <- Rb - delta
+#   }
+#   games_out <- games %>%
+#     mutate(elo_home_pre = elo_home_pre,
+#            elo_away_pre = elo_away_pre,
+#            p_home = p_home)
+#   list(games = games_out, ratings = ratings)
+# }
+# 
+# ### 2.  Carry‑over helper ------------------------------------------------------
+# carry_over <- function(ratings, carry = 0.7) {
+#   if (length(ratings) == 0) return(ratings)
+#   mu <- mean(unlist(ratings))
+#   lapply(ratings, function(r) carry * r + (1 - carry) * mu)
+# }
+# 
+# ### 3.  Tune K once on 2012‑14 (Win‑loss with margin weight) -------------------
+# wl_weight   <- log1p(abs(base_games$goal_diff))
+# wl_outcome  <- as.integer(base_games$goal_diff > 0)  # 1 if home wins
+# 
+# logloss <- function(p, y) {
+#   eps <- 1e-12
+#   p <- pmin(pmax(p, eps), 1 - eps)
+#   -(y * log(p) + (1 - y) * log1p(-p))
+# }
+# 
+# tune_K <- function(K_grid) {
+#   best <- Inf; K_opt <- NA; ratings <- list()
+#   for (K in K_grid) {
+#     ratings_k <- ratings; ll <- c()
+#     for (yr in 2012:2014) {
+#       rows <- base_games$season == yr
+#       res <- elo_run(base_games[rows, ], ratings_k, K,
+#                      outcome_vec = wl_outcome[rows],
+#                      weight_vec  = wl_weight[rows])
+#       ll <- c(ll, logloss(res$games$p_home, wl_outcome[rows]))
+#       ratings_k <- carry_over(res$ratings)
+#     }
+#     m <- mean(ll)
+#     if (m < best) { best <- m; K_opt <- K }
+#   }
+#   K_opt
+# }
+# 
+# K_best <- tune_K(4:40)
+# 
+# ### 4.  Win‑loss Elo (margin weighted) 2015‑16 ---------------------------------
+# ratings <- list(); out_wl <- list()
+# for (yr in 2015:max(base_games$season)) {
+#   rows <- base_games$season == yr
+#   res <- elo_run(base_games[rows, ], ratings, K_best,
+#                  outcome_vec = wl_outcome[rows],
+#                  weight_vec  = wl_weight[rows])
+#   out_wl[[as.character(yr)]] <- res$games
+#   ratings <- carry_over(res$ratings)
+# }
+# wl_elo_games <- bind_rows(out_wl) %>%
+#   select(game_id, p_home_wl = p_home, elo_wl_home = elo_home_pre, 
+#          elo_wl_away = elo_away_pre)
+# 
+# ### 5.  Possession Elo (Corsi diff, unweighted) --------------------------------
+# poss_outcome <- as.integer(base_games$corsi_diff > 0)
+# ratings <- list(); out_poss <- list()
+# for (yr in 2015:max(base_games$season)) {
+#   rows <- base_games$season == yr
+#   res  <- elo_run(base_games[rows, ], ratings, K_best,
+#                   outcome_vec = poss_outcome[rows])
+#   out_poss[[as.character(yr)]] <- res$games
+#   ratings <- carry_over(res$ratings)
+# }
+# poss_elo_games <- bind_rows(out_poss) %>%
+#   select(game_id, p_home_poss = p_home, elo_poss_home = elo_home_pre, 
+#          elo_poss_away = elo_away_pre)
+# 
+# ### 6.  Power‑play Goals Elo (PPG diff, unweighted) -----------------------------
+# pp_outcome <- as.integer(base_games$pp_goal_diff > 0)
+# ratings <- list(); out_pp <- list()
+# for (yr in 2015:max(base_games$season)) {
+#   rows <- base_games$season == yr
+#   res <- elo_run(base_games[rows, ], ratings, K_best,
+#                  outcome_vec = pp_outcome[rows])
+#   out_pp[[as.character(yr)]] <- res$games
+#   ratings <- carry_over(res$ratings)
+# }
+# pp_elo_games <- bind_rows(out_pp) %>%
+#   select(game_id, p_home_pp = p_home, elo_pp_home = elo_home_pre, 
+#          elo_pp_away = elo_away_pre)
+# 
+# ### 7.  Join all Elo features back to team_df ----------------------------------
+# team_df <- team_df %>% 
+#   # filter(is_home == 1)%>%
+#   # filter(season >= 2015) %>%
+#   left_join(wl_elo_games, by = "game_id") %>% 
+#   left_join(poss_elo_games, by = "game_id") %>% 
+#   left_join(pp_elo_games, by = "game_id") %>% 
+#   mutate(
+#     # own Elo pre-rating
+#     elo_wl_pre   = if_else(is_home == 1, elo_wl_home,   elo_wl_away),
+#     elo_poss_pre = if_else(is_home == 1, elo_poss_home, elo_poss_away),
+#     elo_pp_pre   = if_else(is_home == 1, elo_pp_home,   elo_pp_away),
+#     
+#     # win-probability for THIS team
+#     elo_wl_prob   = if_else(is_home == 1, p_home_wl,   1 - p_home_wl),
+#     elo_poss_prob = if_else(is_home == 1, p_home_poss, 1 - p_home_poss),
+#     elo_pp_prob   = if_else(is_home == 1, p_home_pp,   1 - p_home_pp),
+#     
+#     # hard class @ 0.50
+#     elo_wl_class   = as.integer(if_else(elo_wl_prob >= 0.5, 1, 0)),
+#     elo_poss_class = as.integer(if_else(elo_poss_prob >= 0.5, 1, 0)),
+#     elo_pp_class   = as.integer(if_else(elo_pp_prob >= 0.5, 1, 0))
+#   )
+
+## REMOVE EXCESS COLUMNS FROM TEAM DATA FOR MODEL --- 
+# Ensure team_df is sorted by season and game_date
+team_df <- team_df  %>%
+  filter(season >= 2016) %>%
   arrange(season, startTimeUTC) %>%
   mutate(game_won = as.factor(game_won)) %>%
   drop_na() %>%
@@ -2546,17 +2916,12 @@ team_df <- team_df %>%
     game_won_numeric = as.integer(as.character(game_won)),
     days_since_last_game = as.integer(as.Date(startTimeUTC) - lag(as.Date(startTimeUTC))),
     is_back_to_back = if_else(days_since_last_game == 1, 1, 0),
-    is_back_to_back = coalesce(is_back_to_back,0)
-  ) %>%
-  mutate(
-    b2b_win = if_else(is_back_to_back == 1, game_won_numeric, NA_integer_)
-  ) %>%
+    is_back_to_back = coalesce(is_back_to_back,0)) %>%
+  mutate(b2b_win = if_else(is_back_to_back == 1, game_won_numeric, NA_integer_)) %>%
   # Calculate win rate only on back-to-back second games
-  mutate(
-    b2b_wins_cumsum = cumsum(replace_na(b2b_win, 0)),
-    b2b_games_cumsum = cumsum(!is.na(b2b_win)),
-    b2b_win_rate = if_else(b2b_games_cumsum > 0, b2b_wins_cumsum / b2b_games_cumsum, 0)
-  ) %>%
+  mutate(b2b_wins_cumsum = cumsum(replace_na(b2b_win, 0)),
+         b2b_games_cumsum = cumsum(!is.na(b2b_win)),
+         b2b_win_rate = if_else(b2b_games_cumsum > 0, b2b_wins_cumsum / b2b_games_cumsum, 0)) %>%
   # Carry forward last known win rate and lag it for prospective use
   fill(b2b_win_rate, .direction = "down") %>%
   mutate(b2b_win_ratio_lag = lag(b2b_win_rate, 1),
@@ -2565,13 +2930,23 @@ team_df <- team_df %>%
   select(-game_won_numeric, -b2b_win, -b2b_wins_cumsum, 
          -b2b_games_cumsum, -b2b_win_rate, -days_since_last_game) %>%
   arrange(season, startTimeUTC)
-
 rm(player_df)
 saveRDS(team_df,file = paste0(rds_files_path, "/Data/team_df_v2.rds"))
+
+
+## Misc datatime data preprocessing
 team_df <- readRDS(paste0(rds_files_path, "/Data/team_df_v2.rds"))
-team_df_played <- team_df %>% filter(game_status == "played")
+team_df_played <- team_df %>% filter(game_status == "played") %>% 
+  mutate(game_time = as.POSIXct(startTimeUTC, tz = "America/Chicago"),
+         startTimeUTC = as.POSIXct(startTimeUTC, tz = "UTC",
+                                   format = "%Y-%m-%dT%H:%M:%SZ"),
+         # build your local time:
+         venue_time = startTimeUTC
+         + hours(as.integer(substr(venueUTCOffset, 1, 3)))
+         + minutes(sign(hours(as.integer(substr(venueUTCOffset, 1, 3)))) * as.integer(substr(venueUTCOffset, 5, 6))))
 
 
+# CV & RECIPE ----
 ### ----ROLLING CV (250 GAME SPLIT)-----
 #Create a game-level data frame
 game_level_df <- team_df_played %>%
@@ -2649,94 +3024,293 @@ rm(first_split)
 
 # Define recipe, model, and workflow
 team_recipe <- recipe(game_won ~ ., data = team_df_played) %>%
-  step_rm(game_status) %>%
-  # step_rm(team_game_spread) %>%
+  step_rm(game_status) %>% #step_filter(gameType == 2) %>%
   step_rm(game_won_spread) %>%
   step_rm(playerId) %>%
+  step_rm(prior_rank, rolling_rank, rolling_points, cum_points, cum_rank) %>%
   step_rm(all_of(c("venueUTCOffset","venueLocation","away_team_name", 
                    "away_team_locale","home_team_name", "home_team_locale", 
-                   "winning_team","winning_team_id"))) %>%
+                   "winning_team","winning_team_id","venue_time", "game_time"))) %>%
+  step_rm(any_of(!!cols_to_drop)) %>%
+  # step_rm(any_of(!!to_remove)) %>%
+  step_rm(last_period_type) %>%
   # Assign specific roles to ID columns
-  update_role(game_id, home_id, away_id, teamId, opp_teamId,
-              new_role = "ID") %>%
-  update_role(game_date, new_role = "DATE") %>%
+  update_role(game_id, home_id, away_id, teamId, opp_teamId, new_role = "ID")%>%
+  update_role(game_date, new_role = "DATE") %>% 
   update_role(startTimeUTC, new_role = "DATETIME") %>%
   step_mutate(is_home = as.factor(is_home)) %>%
   step_mutate(season = as.factor(season)) %>%
+  step_mutate(gameType = as.factor(gameType)) %>%
+  step_mutate(is_back_to_back = as.factor(is_back_to_back)) %>%
+  step_mutate(no_feats_games = as.factor(no_feats_games)) %>%
   step_zv() %>%
   step_normalize(all_numeric_predictors()) %>%
-  step_novel(all_nominal_predictors(), -is_home) %>%
-  step_dummy(all_nominal_predictors()) 
+  step_novel(all_nominal_predictors(), -is_home, -gameType, -is_back_to_back,
+             -no_feats_games) %>%
+  step_dummy(all_nominal_predictors())
 
 vars <- team_recipe$var_info
-rec_bake <- team_recipe %>% prep() %>% bake(., new_data =  NULL)
-
+rec_bake <- team_recipe %>% prep() %>% bake(new_data = NULL)
+colnames(rec_bake)
 stopCluster(cl)
 gc()
 
-
-saveRDS(team_df_played, file = paste0(rds_files_path, "/Data/team_df_played_v2.rds"))
-saveRDS(team_recipe, file = paste0(rds_files_path, "/Data/team_recipe_goal_v2.rds"))
+saveRDS(team_df_played, file = paste0(rds_files_path, "/Data/team_df_played_v3.rds"))
+saveRDS(team_recipe, file = paste0(rds_files_path, "/Data/team_recipe_goal_v3.rds"))
 saveRDS(final_split, file = paste0(rds_files_path, "/Data/team_final_split.rds"))
 saveRDS(team_splits, file = paste0(rds_files_path, "/Data/team_splits.rds"))
 rm(team_recipe, final_split, team_splits,game_splits)
 gc()
 
-### ----ROLLING CV (25 GAME SPLIT)-----
+### ----ROLLING CV (AVG WEEKLY GAME SPLIT)-----
+#Get Number of games per week
+rds_files_path <- getwd()
+team_df_played <- readRDS(paste0(rds_files_path, "/Data/team_df_played_v3.rds"))
+weekly_games <- team_df_played %>% 
+  group_by(game_id) %>%              # one row per game
+  slice(1) %>% 
+  ungroup() %>% 
+  mutate(week = floor_date(game_time, "week", week_start = 1)) %>% 
+  count(week, name = "games") %>%    # tally actual weeks
+  complete(
+    week = seq(min(week), max(week), by = "1 week"),
+    fill = list(games = 0)) %>%          # generate gaps, set 0 games
+  arrange(week) %>% filter(games != 0)
+avg_games_week <- ceiling(mean(weekly_games$games)) #do for prior seasons to maintain temporal
+two_weeks <- as.integer(avg_games_week * 2)
+
 # Create a game-level data frame
 game_level_df <- team_df_played %>%
-  distinct(game_id, game_date, startTimeUTC) %>%
+  distinct(game_id, game_date, startTimeUTC,game_time, gameType) %>%
   arrange(startTimeUTC, game_id) %>%
   mutate(game_index = row_number())
 
 # Create rolling origin resamples at the game level
+####NOTE##### THIS DOES NOT GRAB THE FINAL SPLIT!!!! ####
+####IT NEEDS TO BE DONE MANUALLY (SEE BELOW) ####
 game_splits <- rolling_origin(
   data = game_level_df,
-  initial = 3611,   # Approx. _ season
-  assess = 25,      # Approx. _ games in the test set
+  initial = 3611, # Approx. 2 season
+  assess = two_weeks, # Approx. _ games in the test set
   cumulative = FALSE,
-  skip = 25       # No overlap between test sets
-)
+  skip = two_weeks-1)   # No overlap between test sets
 
-# Translate splits to player level
-translate_splits <- function(spl) {
-  train_games <- analysis(spl)$game_id
-  test_games <- assessment(spl)$game_id
+game_splits[[1]][[106]][[3]]
+gc()
+
+
+##Add Final Split Manually
+# collect indices already used
+used_ids <- unlist(lapply(game_splits$splits, function(s) assessment(s)$game_id))
+
+# build split for the remaining games
+leftover_ids <- setdiff(game_level_df$game_id, used_ids)
+leftover_games <- game_level_df %>% 
+  filter(game_id %in% tail(leftover_ids,length(leftover_ids)-3611))
+
+# 1. get the maximum game_id
+max_id      <- max(leftover_ids)          # numeric if game_id is numeric
+max_prefix  <- substr(as.character(max_id), 1, 4)
+# 2. keep only IDs that start with that prefix
+new_ids <- leftover_ids[str_starts(as.character(leftover_ids), max_prefix)]
+final_split  <- rsample::make_splits(
+  list(analysis   = tail(which(!(game_level_df$game_id %in% new_ids)),3611),
+       assessment = which(game_level_df$game_id  %in% new_ids)),
+  data = game_level_df)
+
+game_splits <- rsample::manual_rset(
+  splits = c(game_splits$splits, list(final_split)), # append
+  ids    = c(game_splits$id,  dim(game_splits)[1] +1)) # give it a label
+
+game_splits[[1]][[107]][[2]]
+gc()
+
+#Duplicate game_id check (Pre-Translate Splits):
+unique(game_level_df$game_id[duplicated(game_level_df$game_id)])
+assess_all <- map_dfr(game_splits$splits, assessment)
+id_counts <- assess_all %>% count(game_id, name = "n")
+unique(id_counts$n)
+
+# # Translate splits to player level
+# translate_splits <- function(spl) {
+#   train_games <- analysis(spl)$game_id
+#   test_games <- assessment(spl)$game_id
+# 
+#   # Ensure same-date games are handled correctly
+#   train_dates <- game_level_df %>%
+#     filter(game_id %in% train_games) %>%
+#     pull(startTimeUTC)
+# 
+#   test_dates <- game_level_df %>%
+#     filter(game_id %in% test_games) %>%
+#     pull(startTimeUTC)
+# 
+#   #find team rows that match those training or test dates
+#   train_indices <- which(team_df_played$startTimeUTC %in% train_dates)
+#   test_indices <- which(team_df_played$startTimeUTC %in% test_dates)
+# 
+#   rsample::make_splits(
+#     list(analysis = train_indices, assessment = test_indices),
+#     data = team_df_played
+#   )
+# }
+# # Set up parallel backend
+# num_cores <- detectCores()
+# cl <- makeCluster(max(0,num_cores-2))
+# registerDoParallel(cl)
+# 
+# # Translate all game-level splits into player-level splits
+# team_splits_list <- map(game_splits$splits, translate_splits)
+# # Create the rset object for the remaining splits
+# team_splits <- rsample::manual_rset(
+#   splits = team_splits_list,
+#   ids = game_splits$id)
+
+# moved_ids        <- integer(0)
+# team_splits_list <- vector("list", length(game_splits$splits))
+# 
+# for (i in seq_along(game_splits$splits)) { #seq_along(game_splits$splits)
+#   spl       <- game_splits$splits[[i]]
+#   raw_train <- analysis(spl)$game_id
+#   raw_test  <- assessment(spl)$game_id
+#   
+#   print(paste0("Beginning of Slice ",i," moved_ids: ", length(moved_ids)))
+#   print(paste0("Slice ",i," Raw Train: " ,length(raw_train)))
+#   print(paste0("Slice ",i," Raw Test: " ,length(raw_test)))
+#   
+#   # drop previously‐moved games
+#   test0  <- setdiff(raw_test,  moved_ids)
+#   print(paste0("Slice ",i," Prior Drops Test: " ,length(test0)))
+#   
+#   # find any train games that share the test dates
+#   test_dates <- game_level_df %>%
+#     filter(game_id %in% test0) %>%
+#     pull(game_time) %>%
+#     unique()
+#   print(paste0("Slice ",i," test_dates: ", length(test_dates)))
+#   
+#   overlap <- game_level_df %>%
+#     filter(game_id %in% raw_train, game_time %in% test_dates) %>%
+#     pull(game_id) %>%
+#     unique()
+# 
+#   print(paste0("Slice ",i," overlap: ", length(overlap)))
+#   
+#   # only newly moved today
+#   moved_today  <- setdiff(overlap, moved_ids)
+#   print(paste0("Slice ",i," moved_today: ", length(moved_today)))
+#   
+#   train_final  <- setdiff(raw_train, moved_today)
+#   print(paste0("Slice ",i," Train Final: ", length(train_final)))
+#   test_final   <- union(test0,  moved_today)
+#   print(paste0("Slice ",i," Test Final: ", length(test_final)))
+#   
+#   moved_ids    <- union(moved_ids, test_final)
+#   print(paste0("End of Slice ",i," moved_ids: ", length(moved_ids)))
+#   
+#   team_splits_list[[i]] <- rsample::make_splits(
+#     list(analysis   = which(team_df_played$game_id %in% train_final),
+#          assessment = which(team_df_played$game_id %in% test_final)),
+#     data = team_df_played)
+# }
+# 
+# team_splits <- rsample::manual_rset(
+#   splits = team_splits_list,
+#   ids    = game_splits$id
+# )
+
+moved_ids        <- integer(0)
+team_splits_list <- vector("list", length(game_splits$splits))
+
+for (i in seq_along(game_splits$splits)) {
   
-  # Ensure same-date games are handled correctly
-  train_dates <- game_level_df %>%
-    filter(game_id %in% train_games) %>%
-    pull(startTimeUTC)
+  spl       <- game_splits$splits[[i]]
+  raw_train <- analysis(spl)$game_id
+  raw_test  <- assessment(spl)$game_id
   
-  test_dates <- game_level_df %>%
-    filter(game_id %in% test_games) %>%
-    pull(startTimeUTC)
+  # --- 1. keep only fresh test IDs (your existing step) -------------
+  test0 <- setdiff(raw_test, moved_ids)
   
-  #find player rows that match those training or test dates
-  train_indices <- which(team_df_played$startTimeUTC %in% train_dates)
-  test_indices <- which(team_df_played$startTimeUTC %in% test_dates)
+  # --- 2. grab the dates represented in that provisional test set ---
+  test_dates <- game_level_df %>%                 # unchanged
+    filter(game_id %in% test0) %>% 
+    pull(game_time) %>% 
+    as.Date() %>% 
+    unique()
   
-  rsample::make_splits(
-    list(analysis = train_indices, assessment = test_indices),
-    data = team_df_played
-  )
+  # --- 3. pull *all* games that share those dates  ------------------
+  #      (-- NEW: this line is the key addition --)
+  same_day_ids <- game_level_df %>%               
+    filter(as.Date(game_time) %in% test_dates) %>% 
+    pull(game_id) %>% 
+    unique()
+  
+  # --- 4. build final train / test sets -----------------------------
+  overlap <- intersect(raw_train, same_day_ids) # your existing logic
+  moved_today <- setdiff(overlap, moved_ids)
+  test_final <- union(test0, same_day_ids) # <-- NEW union
+  train_final <- setdiff(raw_train, test_final) # <-- excludes all same-day games
+  moved_ids <- union(moved_ids, test_final) # tracker unchanged
+  team_splits_list[[i]] <- rsample::make_splits(
+    list(analysis   = which(team_df_played$game_id %in% train_final),
+         assessment = which(team_df_played$game_id %in% test_final)),
+    data = team_df_played)
 }
 
-# Set up parallel backend
-num_cores <- detectCores()
-cl <- makeCluster(max(0,num_cores-2))
-registerDoParallel(cl)
 
-# Step 1: Translate all game-level splits into player-level splits
-team_splits_list <- map(game_splits$splits, translate_splits)
-
-# Step 4: Create the rset object for the remaining splits
 team_splits <- rsample::manual_rset(
   splits = team_splits_list,
-  ids = game_splits$id
+  ids    = game_splits$id
 )
+#Duplicate game_id check (Pre-Translate Splits):
+unique(game_level_df$game_id[duplicated(game_level_df$game_id)])
+assess_all <- map_dfr(team_splits$splits, assessment)
+id_counts <- assess_all %>% count(game_id, name = "n")
+unique(id_counts$n)
+
+# #find the game_ids with >2 rows
+# bad_ids <- assess_all %>%
+#   count(game_id) %>%
+#   filter(n > 2) %>%
+#   pull(game_id)
+# 
+# #for each of those, show how many rows and how many distinct dates/times
+# bad_games <- assess_all %>%
+#   filter(game_id %in% bad_ids) %>%
+#   # group_by(game_id) %>%
+#   arrange(desc(game_id))
+# 
+# #For those bad_ids, compute distinct counts per column
+# diff_summary <- assess_all %>%
+#   filter(game_id %in% bad_ids) %>%
+#   group_by(game_id) %>%
+#   summarise(
+#     across(
+#       .cols = everything(),
+#       .fns  = ~ n_distinct(.x),
+#       .names = "uniq_{col}"
+#     ),
+#     .groups = "drop"
+#   ) %>%
+#   pivot_longer(
+#     cols      = starts_with("uniq_"),
+#     names_to  = "column",
+#     values_to = "n_unique"
+#   ) %>%
+#   mutate(
+#     column = sub("^uniq_", "", column)
+#   ) %>%
+#   filter(n_unique > 1) %>%
+#   arrange(game_id, column)
+# unique(diff_summary$game_id)
+# length(unique(assess_all$game_id))
+
 final_split <- team_splits$splits[[dim(team_splits)[1]]]
 team_splits <- team_splits[-dim(team_splits)[1],]
+
+assess_all <- map_dfr(team_splits$splits[-1], assessment)
+id_counts <- assess_all %>% count(game_id, name = "n")
+unique(id_counts$n)
 
 # Ensure team_splits is a valid rset object
 class(team_splits) <- c("manual_rset", "rset", "tbl_df", "tbl", "data.frame")
@@ -2757,8 +3331,8 @@ rm(train_indices)
 rm(test_indices)
 rm(first_split)
 
-saveRDS(final_split, file = paste0(rds_files_path, "/Data/team_final_split_v2.rds"))
-saveRDS(team_splits, file = paste0(rds_files_path, "/Data/team_splits_v2.rds"))
+saveRDS(final_split, file = paste0(rds_files_path, "/Data/team_final_split_v3.rds"))
+saveRDS(team_splits, file = paste0(rds_files_path, "/Data/team_splits_v3.rds"))
 
 stopCluster(cl)
 rm(team_df_played,team_splits,final_split)
@@ -2773,6 +3347,7 @@ team_recipe <- recipe(game_won_spread ~ ., data = team_df_played) %>%
   # step_rm(team_game_spread) %>%
   step_rm(game_won) %>%
   step_rm(playerId) %>%
+  step_rm(prior_rank, rolling_rank, rolling_points, cum_points, cum_rank) %>%
   step_rm(all_of(c("venueUTCOffset","venueLocation","away_team_name", 
                    "away_team_locale","home_team_name", "home_team_locale", 
                    "winning_team","winning_team_id"))) %>%
